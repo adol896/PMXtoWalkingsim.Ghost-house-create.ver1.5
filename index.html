@@ -1874,6 +1874,7 @@
         this.stageGroup.name = 'EnvironmentStageGroup';
         this.scene.add(this.stageGroup);
 
+        this.exteriorGround = null;
         this.colliders = [];
         this.stageScale = 1.0;
         this.stageName = '標準テラス庭園';
@@ -1886,13 +1887,13 @@
       }
 
       _setupLights() {
-        this.scene.background = new THREE.Color(0x0b1222);
-        this.scene.fog = new THREE.FogExp2(0x0b1222, 0.015);
+        this.scene.background = new THREE.Color(0x161329);
+        this.scene.fog = new THREE.FogExp2(0x161329, 0.015);
 
-        this.hemiLight = new THREE.HemisphereLight(0x93c5fd, 0x1e293b, 1.05);
+        this.hemiLight = new THREE.HemisphereLight(0x93c5fd, 0x1e293b, 0.85);
         this.scene.add(this.hemiLight);
 
-        this.dirLight = new THREE.DirectionalLight(0xfffbeb, 1.45);
+        this.dirLight = new THREE.DirectionalLight(0xfdba74, 1.1);
         this.dirLight.position.set(14, 24, 14);
         this.dirLight.castShadow = true;
         this.dirLight.shadow.mapSize.set(2048, 2048);
@@ -1935,7 +1936,18 @@
         while (this.stageGroup.children.length > 0) {
           this.stageGroup.remove(this.stageGroup.children[0]);
         }
+        if (this.exteriorGround) {
+          this.scene.remove(this.exteriorGround);
+          if (this.exteriorGround.geometry) this.exteriorGround.geometry.dispose();
+          if (this.exteriorGround.material) this.exteriorGround.material.dispose();
+          this.exteriorGround = null;
+        }
         this.colliders = [];
+      }
+
+      removeColliders(meshSet) {
+        if (!meshSet || meshSet.size === 0) return;
+        this.colliders = this.colliders.filter((m) => !meshSet.has(m));
       }
 
       _makeWoodTexture(c1 = '#3b2316', c2 = '#24140c') {
@@ -2156,6 +2168,23 @@
           });
 
           this.stageGroup.add(model);
+
+          // Expansive exterior ground plane at Y = 0 so players can walk outside and enter GLB buildings smoothly
+          const extGeo = new THREE.PlaneGeometry(360, 360);
+          extGeo.rotateX(-Math.PI / 2);
+          const extMat = new THREE.MeshStandardMaterial({
+            color: 0x161e2e,
+            roughness: 0.92,
+            metalness: 0.04
+          });
+          const extGround = new THREE.Mesh(extGeo, extMat);
+          extGround.name = 'Exterior_Base_Ground';
+          extGround.position.set(0, -0.003, 0);
+          extGround.receiveShadow = true;
+          this.scene.add(extGround);
+          this.exteriorGround = extGround;
+          meshes.push(extGround);
+
           this.colliders = meshes;
           this.stageName = file.name.replace(/\.(glb|gltf)$/i, '');
           this.applyScale(this.stageScale);
@@ -2381,14 +2410,13 @@
         this.scene.add(this.padGroup);
 
         this.gimmicks = [];
-        // Balanced foot-level touch radius (1.8m) + vertical floor check (<= 0.85m)
-        // so ghosts above head height or on different floors NEVER trigger falsely
+        // Balanced foot-level touch radius (1.8m) + vertical floor check (<= 1.35m)
+        // so ghosts on the same floor trigger reliably while upper/lower floors do NOT trigger falsely
         this.triggerRadius = 1.8;
-        this.maxVerticalTouchDiff = 0.85;
+        this.maxVerticalTouchDiff = 1.35;
         this.soundEnabled = true;
         this.stealthMode = true; // Hide ghost body until foot spawn point is touched
-        this.showSpawnPads = false; // Hide foot-level spawn point circle by default
-        this.uiHidden = false;
+        this.showPads = false; // Hide foot level spawn point circle by default
         this.audioCtx = null;
         this.screamDistortionCurve = null;
         this.time = 0;
@@ -2397,6 +2425,53 @@
         this.placementReticle = this._buildPlacementReticle();
         this.placementReticle.visible = false;
         this.scene.add(this.placementReticle);
+      }
+
+      _buildFootSpawnPad(pos, radius) {
+        const pad = new THREE.Group();
+        pad.position.copy(pos);
+
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.62
+        });
+        const ring = new THREE.Mesh(new THREE.RingGeometry(Math.max(0.18, radius - 0.08), radius, 32), ringMat);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.022;
+
+        const discMat = new THREE.MeshBasicMaterial({
+          color: 0x7e22ce,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.14
+        });
+        const disc = new THREE.Mesh(new THREE.CircleGeometry(Math.max(0.16, radius - 0.08), 28), discMat);
+        disc.rotation.x = -Math.PI / 2;
+        disc.position.y = 0.018;
+
+        const coreDot = new THREE.Mesh(
+          new THREE.CircleGeometry(0.14, 16),
+          new THREE.MeshBasicMaterial({ color: 0xe879f9, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
+        );
+        coreDot.rotation.x = -Math.PI / 2;
+        coreDot.position.y = 0.026;
+
+        pad.add(ring, disc, coreDot);
+        pad.userData = { ringMat, discMat, baseRadius: radius };
+        pad.visible = this.showPads;
+        this.padGroup.add(pad);
+        return pad;
+      }
+
+      setShowPads(visible) {
+        this.showPads = Boolean(visible);
+        for (const g of this.gimmicks) {
+          if (g.pad) {
+            g.pad.visible = this.showPads;
+          }
+        }
       }
 
       _buildPlacementReticle() {
@@ -2423,67 +2498,6 @@
 
         group.add(outerRing, innerDisc, beacon);
         return group;
-      }
-
-      _buildFootSpawnPad(pos, radius) {
-        const pad = new THREE.Group();
-        pad.position.copy(pos);
-
-        const ringMat = new THREE.MeshBasicMaterial({
-          color: 0xa855f7,
-          side: THREE.DoubleSide,
-          transparent: true,
-          opacity: 0.55
-        });
-        const ring = new THREE.Mesh(new THREE.RingGeometry(0.88, 1.0, 36), ringMat);
-        ring.rotation.x = -Math.PI / 2;
-        ring.position.y = 0.025;
-        ring.scale.setScalar(radius);
-
-        const discMat = new THREE.MeshBasicMaterial({
-          color: 0x7e22ce,
-          side: THREE.DoubleSide,
-          transparent: true,
-          opacity: 0.14
-        });
-        const disc = new THREE.Mesh(new THREE.CircleGeometry(1.0, 32), discMat);
-        disc.rotation.x = -Math.PI / 2;
-        disc.position.y = 0.02;
-        disc.scale.setScalar(radius);
-
-        pad.add(ring, disc);
-        pad.userData = { ring, disc, ringMat, discMat };
-        pad.visible = this.showSpawnPads && !this.uiHidden;
-        this.padGroup.add(pad);
-        return pad;
-      }
-
-      setTriggerRadius(radius) {
-        this.triggerRadius = radius;
-        for (const g of this.gimmicks) {
-          if (g.pad && g.pad.userData) {
-            g.pad.userData.ring.scale.setScalar(radius);
-            g.pad.userData.disc.scale.setScalar(radius);
-          }
-        }
-      }
-
-      setShowSpawnPads(visible) {
-        this.showSpawnPads = Boolean(visible);
-        for (const g of this.gimmicks) {
-          if (g.pad) {
-            g.pad.visible = this.showSpawnPads && !this.uiHidden;
-          }
-        }
-      }
-
-      setUIHidden(hidden) {
-        this.uiHidden = Boolean(hidden);
-        for (const g of this.gimmicks) {
-          if (g.pad) {
-            g.pad.visible = this.showSpawnPads && !this.uiHidden;
-          }
-        }
       }
 
       setReticlePosition(pos, visible = true) {
@@ -2529,11 +2543,12 @@
         while (this.spawnedGroup.children.length > 0) {
           this.spawnedGroup.remove(this.spawnedGroup.children[0]);
         }
-        this.gimmicks = this.gimmicks.filter((g) => {
-          if (g.kind === 'glb') return true;
-          if (g.pad && g.pad.parent) g.pad.parent.remove(g.pad);
-          return false;
+        this.gimmicks.forEach((g) => {
+          if (g.kind === 'builtin' && g.pad && g.pad.parent) {
+            g.pad.parent.remove(g.pad);
+          }
         });
+        this.gimmicks = this.gimmicks.filter((g) => g.kind === 'glb');
       }
 
       removeGimmickById(id) {
@@ -2583,16 +2598,59 @@
         this._activateScare(g, onScareCallback, false);
       }
 
+      syncWithStageScale(newScale) {
+        for (const g of this.gimmicks) {
+          if (g.kind === 'glb' && g.node) {
+            g.node.updateMatrixWorld(true);
+            const prevVis = g.node.visible;
+            g.node.visible = true;
+            const box = new THREE.Box3().setFromObject(g.node);
+            g.node.visible = prevVis;
+            if (!box.isEmpty() && isFinite(box.min.x)) {
+              const cx = (box.min.x + box.max.x) * 0.5;
+              const cz = (box.min.z + box.max.z) * 0.5;
+              g.basePos.set(cx, box.min.y, cz);
+            }
+            if (g.pad) {
+              g.pad.position.copy(g.basePos);
+            }
+          }
+        }
+      }
+
       scanGLBForTriggers(gltfScene, animations = [], stageWorld = null) {
         this.gimmicks = this.gimmicks.filter((g) => g.kind === 'builtin');
         if (!gltfScene) return 0;
 
         gltfScene.updateMatrixWorld(true);
-        const keywordRegex = /(ghost|obake|yokai|scare|trigger|おばけ|妖怪|幽霊)/i;
-        let found = 0;
+        const includeRegex = /(ghost|obake|yokai|creature|monster|horror|zombie|spirit|phantom|specter|wraith|demon|witch|skeleton|skull|doll|mannequin|stalker|entity|enemy|scare|trigger|おばけ|お化け|妖怪|幽霊|クリーチャー|モンスター|怪異|亡霊|悪霊|ゾンビ|骸骨|人形)/i;
+        const excludeRegex = /^(?:.*_)?(wall|floor|ground|ceiling|roof|door|window|stair|step|corridor|hall|room|house|hospital|building|stage|table|chair|bed|lamp|light|pillar|column|fence|gate|torii|壁|床|天井|ドア|扉|窓|階段|廊下|部屋|建物|病院)(?:_?\d*)?$/i;
+
+        const matchedObjects = [];
+        const claimedNodes = new Set();
+        const ghostMeshes = new Set();
 
         gltfScene.traverse((obj) => {
-          if (!obj.name || !keywordRegex.test(obj.name)) return;
+          if (obj === gltfScene || claimedNodes.has(obj)) return;
+          if (!obj.name || !includeRegex.test(obj.name) || excludeRegex.test(obj.name.trim())) return;
+
+          matchedObjects.push(obj);
+          obj.traverse((desc) => {
+            claimedNodes.add(desc);
+            if (desc.isMesh) {
+              ghostMeshes.add(desc);
+            }
+          });
+        });
+
+        // Exclude all ghost/creature meshes from stage colliders BEFORE sampling ground height
+        // so hidden ghosts NEVER act as invisible walls and raycasts never hit the ghost's own head!
+        if (stageWorld && ghostMeshes.size > 0) {
+          stageWorld.removeColliders(ghostMeshes);
+        }
+
+        let found = 0;
+        for (const obj of matchedObjects) {
           const matchingClips = animations.filter((clip) =>
             clip.tracks.some((tr) => tr.name.startsWith(obj.name + '.'))
           );
@@ -2616,16 +2674,30 @@
             }
           }
 
-          obj.visible = !this.stealthMode;
-
+          // Compute the ghost's true visual world bounding box instead of its node origin (which may be at 0,0,0)
+          obj.visible = true;
+          gltfScene.updateMatrixWorld(true);
+          const box = new THREE.Box3().setFromObject(obj);
           const worldPos = new THREE.Vector3();
           obj.getWorldPosition(worldPos);
-          let footY = worldPos.y;
+
+          let centerX = worldPos.x;
+          let centerZ = worldPos.z;
+          let bottomY = worldPos.y;
+          if (!box.isEmpty() && isFinite(box.min.x) && isFinite(box.max.x)) {
+            centerX = (box.min.x + box.max.x) * 0.5;
+            centerZ = (box.min.z + box.max.z) * 0.5;
+            bottomY = box.min.y;
+          }
+
+          obj.visible = !this.stealthMode;
+
+          let footY = bottomY;
           if (stageWorld) {
-            const sampled = stageWorld.sampleGroundHeight(worldPos.x, worldPos.z, worldPos.y + 0.5);
+            const sampled = stageWorld.sampleGroundHeight(centerX, centerZ, bottomY + 0.65);
             if (sampled !== null) footY = sampled;
           }
-          const footSpawnPos = new THREE.Vector3(worldPos.x, footY, worldPos.z);
+          const footSpawnPos = new THREE.Vector3(centerX, footY, centerZ);
           const pad = this._buildFootSpawnPad(footSpawnPos, this.triggerRadius);
 
           this.gimmicks.push({
@@ -2647,7 +2719,7 @@
             phase: found * 1.1
           });
           found++;
-        });
+        }
 
         return found;
       }
@@ -3406,11 +3478,6 @@
         if (g.node) {
           g.node.visible = true;
         }
-        if (g.pad && g.pad.userData) {
-          g.pad.userData.ringMat.color.setHex(0xf43f5e);
-          g.pad.userData.discMat.color.setHex(0xe11d48);
-          g.pad.userData.ringMat.opacity = 0.9;
-        }
 
         if (playerPos && g.basePos) {
           const toPlayer = new THREE.Vector3(playerPos.x - g.basePos.x, 0, playerPos.z - g.basePos.z);
@@ -3450,16 +3517,31 @@
             g.mixer.update(dt);
           }
 
-          // Foot-level spawn point check:
-          // Must touch the foot spawn point horizontally AND be on the same floor elevation (not above head / different floor)
+          // Foot-level spawn point check: player's feet must touch the floor pad at the ghost's base
+          // (ignores ghosts overhead on upper floors or down in lower floors)
           const spawnPt = g.basePos;
-          let horizDist = Infinity;
-          let vertDiff = Infinity;
-          if (playerPos && spawnPt) {
-            horizDist = Math.hypot(spawnPt.x - playerPos.x, spawnPt.z - playerPos.z);
-            vertDiff = Math.abs(spawnPt.y - playerPos.y);
-          }
+          const horizDist = playerPos
+            ? Math.hypot(spawnPt.x - playerPos.x, spawnPt.z - playerPos.z)
+            : Infinity;
+          const vertDiff = playerPos
+            ? Math.abs(spawnPt.y - playerPos.y)
+            : Infinity;
           const isTouchingFootPad = horizDist <= this.triggerRadius && vertDiff <= this.maxVerticalTouchDiff;
+
+          if (g.pad) {
+            const scaleRatio = this.triggerRadius / (g.pad.userData.baseRadius || 1.8);
+            g.pad.scale.set(scaleRatio, 1, scaleRatio);
+            g.pad.visible = this.showPads;
+            if (g.state === 'scare') {
+              g.pad.userData.ringMat.color.setHex(0xf43f5e);
+              g.pad.userData.discMat.color.setHex(0xe11d48);
+              g.pad.userData.discMat.opacity = 0.34;
+            } else {
+              g.pad.userData.ringMat.color.setHex(0xa855f7);
+              g.pad.userData.discMat.color.setHex(0x7e22ce);
+              g.pad.userData.discMat.opacity = 0.14;
+            }
+          }
 
           if (g.state === 'idle') {
             if (isTouchingFootPad) {
@@ -3467,12 +3549,6 @@
               soundPlayedThisFrame = true;
             } else {
               g.node.visible = !this.stealthMode;
-
-              if (g.pad && g.pad.userData && g.pad.visible) {
-                g.pad.userData.ringMat.color.setHex(0xa855f7);
-                g.pad.userData.discMat.color.setHex(0x7e22ce);
-                g.pad.userData.ringMat.opacity = 0.42 + Math.sin(this.time * 3.2 + g.phase) * 0.14;
-              }
 
               if (g.kind === 'builtin' && g.node.visible) {
                 const motion = g.motionType || 'burst';
@@ -3503,13 +3579,13 @@
             const progress = 1 - Math.max(0, g.stateTimer / 1.75);
             const popIn = Math.min(1.0, progress / 0.08);
 
-            if (playerPos && (g.motionType || 'burst') !== 'whirlwind' && spawnPt) {
-              const dx = playerPos.x - spawnPt.x;
-              const dz = playerPos.z - spawnPt.z;
-              g.node.rotation.y = Math.atan2(dx, dz);
-            }
-
             if (g.kind === 'builtin') {
+              if (playerPos && (g.motionType || 'burst') !== 'whirlwind') {
+                const dx = playerPos.x - g.basePos.x;
+                const dz = playerPos.z - g.basePos.z;
+                g.node.rotation.y = Math.atan2(dx, dz);
+              }
+
               const motion = g.motionType || 'burst';
               const burst = Math.sin(Math.min(1, progress * 1.35) * Math.PI);
               const tremble = Math.sin(this.time * 54) * 0.085 * (1 - progress);
@@ -3586,57 +3662,52 @@
               if (g.parts?.light) {
                 g.parts.light.intensity = 2.0 + burst * 4.5;
               }
-            } else if (!g.scareAction) {
-              const burst = Math.sin(progress * Math.PI);
-              if (g.nodeOrigPos) g.node.position.copy(g.nodeOrigPos);
-              g.node.scale.set(
-                g.baseScale.x * (1 + burst * 0.28),
-                g.baseScale.y * (1 + burst * 0.28),
-                g.baseScale.z * (1 + burst * 0.28)
+            } else if (!g.scareAction && g.nodeOrigPos) {
+              // Keep GLB ghost anchored at its authored local transform while vibrating menacingly
+              const shiver = Math.sin(this.time * 52) * 0.04 * (1 - progress);
+              g.node.position.set(
+                g.nodeOrigPos.x + shiver,
+                g.nodeOrigPos.y,
+                g.nodeOrigPos.z + Math.cos(this.time * 46) * 0.04 * (1 - progress)
               );
             }
 
             if (g.stateTimer <= 0) {
               g.state = 'cooldown';
-              g.stateTimer = 3.0;
+              g.stateTimer = 3.5;
+
               if (g.kind === 'builtin') {
                 g.node.position.copy(g.basePos);
                 if ((g.motionType || 'burst') === 'ceiling_drop') {
                   g.node.position.y = g.basePos.y + 2.35;
                 }
-              } else if (g.nodeOrigPos) {
-                g.node.position.copy(g.nodeOrigPos);
+                g.node.rotation.x = 0;
+                g.node.rotation.z = 0;
+                g.node.scale.copy(g.baseScale);
+                if (g.parts?.tongue) g.parts.tongue.scale.z = 1.0;
+                if (g.parts?.neck && g.parts?.head) {
+                  g.parts.neck.scale.y = 1.0;
+                  g.parts.neck.position.y = 1.34;
+                  g.parts.head.position.set(0, 1.54, 0);
+                }
+                if (g.parts?.beadRing) g.parts.beadRing.scale.setScalar(1.0);
+                if (g.parts?.jaw) g.parts.jaw.position.y = 0.81;
+                if (g.parts?.light) g.parts.light.intensity = 1.8;
+              } else {
+                if (g.nodeOrigPos) g.node.position.copy(g.nodeOrigPos);
+                g.node.scale.copy(g.baseScale);
+                if (g.idleAction) {
+                  if (g.scareAction) g.scareAction.fadeOut(0.25);
+                  g.idleAction.reset().fadeIn(0.25).play();
+                }
               }
-              g.node.rotation.x = 0;
-              g.node.rotation.z = 0;
-              g.node.scale.copy(g.baseScale);
-              if (g.parts?.tongue) g.parts.tongue.scale.z = 1.0;
-              if (g.parts?.neck && g.parts?.head) {
-                g.parts.neck.scale.y = 1.0;
-                g.parts.neck.position.y = 1.34;
-                g.parts.head.position.set(0, 1.54, 0);
-              }
-              if (g.parts?.beadRing) g.parts.beadRing.scale.setScalar(1.0);
-              if (g.parts?.jaw) g.parts.jaw.position.y = 0.81;
-              if (g.parts?.light) g.parts.light.intensity = 1.8;
 
-              if (g.kind === 'glb' && g.idleAction) {
-                if (g.scareAction) g.scareAction.fadeOut(0.25);
-                g.idleAction.reset().fadeIn(0.25).play();
-              }
-
-              if (g.pad && g.pad.userData) {
-                g.pad.userData.ringMat.color.setHex(0xa855f7);
-                g.pad.userData.discMat.color.setHex(0x7e22ce);
-                g.pad.userData.ringMat.opacity = 0.45;
-              }
               g.node.visible = !this.stealthMode;
             }
           } else if (g.state === 'cooldown') {
             g.stateTimer -= dt;
             g.node.visible = !this.stealthMode;
-            // Re-arm once timer expires AND character steps off the foot spawn pad (or climbs to another floor)
-            if (g.stateTimer <= 0 && (horizDist > this.triggerRadius * 1.15 || vertDiff > this.maxVerticalTouchDiff)) {
+            if (g.stateTimer <= 0 && (!isTouchingFootPad || horizDist > this.triggerRadius * 1.15)) {
               g.state = 'idle';
             }
           }
@@ -3647,97 +3718,143 @@
     // =========================================================================
     // 6. MAIN STUDIO APPLICATION CONTROLLER
     // =========================================================================
-    class PMXMultiStudioApp {
+    class StudioApp {
       constructor() {
         this.container = document.getElementById('canvas-container');
         this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 1.15;
+        this.renderer.toneMappingExposure = 1.08;
         this.container.appendChild(this.renderer.domElement);
 
         this.scene = new THREE.Scene();
-        this.camera = new THREE.PerspectiveCamera(56, window.innerWidth / window.innerHeight, 0.1, 250);
+        this.camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.08, 450);
 
-        this.lipSync = new VoiceLipSyncEngine();
         this.stageWorld = new StageWorld(this.scene);
         this.ghostSystem = new GhostGimmickSystem(this.scene);
+        this.lipSync = new VoiceLipSyncEngine();
 
-        // Customizable Initial Spawn Position & Yaw
-        this.initialSpawnPos = new THREE.Vector3(0, 0, 2.5);
-        this.initialSpawnYaw = Math.PI;
-        this.spawnClickPlacementMode = false;
-
-        // Multi-character roster
         this.characters = [];
         this.activeCharIndex = 0;
-        this.charCounter = 1;
+        this.charCounter = 0;
 
-        const initialChar = new CharacterEntity('char_1', '深紅の探索者', this.scene);
-        initialChar.root.position.copy(this.initialSpawnPos);
-        initialChar.root.rotation.y = this.initialSpawnYaw;
-        this.characters.push(initialChar);
-
-        // VMD / VPD Motion Library
         this.motions = [];
         this.motionCounter = 0;
-        this.motionTargetMode = 'active';
+        this.motionTargetMode = 'active'; // 'active' | 'all'
+        this.autoStopOnMove = true;
 
-        // Controls & Camera State
-        this.camYaw = 0;
-        this.camPitch = 0.25;
-        this.camDist = 3.8;
-        this.isOrbitDragging = false;
-        this.lastPointer = { x: 0, y: 0 };
+        // Initial Spawn Point (customizable via Stage tab)
+        this.initialSpawnPos = new THREE.Vector3(0, 0, 2.5);
+        this.initialSpawnYaw = Math.PI;
+
+        // Camera & Input State
+        this.cameraYaw = 0;
+        this.cameraPitch = 0.24;
+        this.cameraDistance = 4.6;
+        this.isFirstPerson = false;
+        this.isDraggingOrbit = false;
+        this.pointerDownPos = { x: 0, y: 0 };
+        this.lastPointerPos = { x: 0, y: 0 };
 
         this.keys = {};
-        this.touchMove = { up: false, down: false, left: false, right: false };
+        this.touchDirs = { up: false, down: false, left: false, right: false };
         this.touchSprint = false;
+
+        // Studio Toggles
         this.autoWalkEnabled = false;
+        this.flashlightOn = false;
         this.uiHidden = false;
-        this.flashlightEnabled = false;
-        this.firstPersonMode = false;
-        this.headBobTimer = 0;
-        this.cameraShakeTimer = 0;
-
-        this.selectedGhostVariant = 'lantern';
-        this.ghostClickPlacementMode = false;
-        this.lastScareToastTime = 0;
-
-        this.expressions = [
-          { id: 'neutral', label: '通常' },
-          { id: 'happy', label: '微笑み' },
-          { id: 'surprised', label: '驚き' },
-          { id: 'relaxed', label: '穏やか' }
-        ];
-        this.expressionIdx = 0;
-
-        this.lightingModes = [
-          { id: 'day', icon: '☀️', label: '昼間' },
-          { id: 'twilight', icon: '🌆', label: '夕暮れ' },
-          { id: 'night', icon: '🌙', label: '夜' }
-        ];
-        this.lightingIdx = 1;
-        this.stageWorld.setLightingMode('twilight');
-        document.getElementById('lighting-icon').textContent = '🌆';
-        document.getElementById('lighting-label').textContent = '夕暮れ';
         this.isLoadingAsset = false;
 
+        this.lightingModes = [
+          { id: 'twilight', icon: '🌆', label: '夕暮れ' },
+          { id: 'night', icon: '🌙', label: '深夜' },
+          { id: 'day', icon: '☀️', label: '昼間' }
+        ];
+        this.lightingIndex = 0;
+
+        this.expressionModes = [
+          { id: 'neutral', label: '通常' },
+          { id: 'happy', label: '笑顔' },
+          { id: 'surprised', label: '驚き' },
+          { id: 'relaxed', label: 'なごみ' }
+        ];
+        this.expressionIndex = 0;
+
+        // Placement Modes
+        this.selectedGhostVariant = 'lantern';
+        this.selectedGhostMotion = 'burst';
+        this.clickPlaceMode = false;
+        this.spawnClickMode = false;
+
+        this.raycaster = new THREE.Raycaster();
+        this.mouseNDC = new THREE.Vector2();
         this.clock = new THREE.Clock();
+
+        this._setupLipSyncCallbacks();
+        this._spawnInitialCharacter();
         this._bindEvents();
-        this._syncSpawnUI();
+        this._updateSpawnInputsUI();
         this._refreshAllUI();
-        this._animate();
+
+        this._animate = this._animate.bind(this);
+        requestAnimationFrame(this._animate);
       }
 
       get activeCharacter() {
-        return this.characters[this.activeCharIndex] || this.characters[0] || null;
+        return this.characters[this.activeCharIndex] || null;
       }
 
-      _setLoadingOverlay(visible, title = '読み込み中...', subtitle = '') {
+      _spawnInitialCharacter() {
+        const char = new CharacterEntity(`char_${++this.charCounter}`, '深紅の探索者', this.scene);
+        char.root.position.copy(this.initialSpawnPos);
+        char.root.rotation.y = this.initialSpawnYaw;
+        this.characters.push(char);
+        this.activeCharIndex = 0;
+      }
+
+      _setupLipSyncCallbacks() {
+        this.lipSync.onStateChange = (mode, label) => {
+          const badge = document.getElementById('lipsync-badge');
+          if (badge) {
+            badge.textContent = label;
+            badge.className =
+              mode === 'idle'
+                ? 'text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300'
+                : 'text-[11px] px-1.5 py-0.5 rounded bg-pink-600 text-white font-bold';
+          }
+          const micBtnLabel = document.getElementById('mic-btn-label');
+          if (micBtnLabel) {
+            micBtnLabel.textContent = mode === 'mic' ? 'マイク入力を停止' : 'マイク入力を開始';
+          }
+        };
+      }
+
+      showToast(message, tone = 'sky') {
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+        const colors = {
+          sky: 'border-sky-400/50 bg-slate-900/95 text-sky-100',
+          emerald: 'border-emerald-400/50 bg-slate-900/95 text-emerald-100',
+          amber: 'border-amber-400/50 bg-slate-900/95 text-amber-100',
+          purple: 'border-purple-400/50 bg-slate-900/95 text-purple-100',
+          rose: 'border-rose-400/50 bg-slate-900/95 text-rose-100'
+        };
+        const el = document.createElement('div');
+        el.className = `studio-panel rounded-2xl px-4 py-2.5 text-xs font-medium border shadow-xl transition-all duration-300 ${colors[tone] || colors.sky}`;
+        el.textContent = message;
+        container.appendChild(el);
+        setTimeout(() => {
+          el.style.opacity = '0';
+          el.style.transform = 'translateY(-6px)';
+          setTimeout(() => el.remove(), 300);
+        }, 2800);
+      }
+
+      _setLoading(visible, title = '読み込み中...', subtitle = 'データを解析しています') {
         this.isLoadingAsset = visible;
         const overlay = document.getElementById('loading-overlay');
         if (!overlay) return;
@@ -3752,7 +3869,7 @@
         }
       }
 
-      _promptSelectPMXEntries(pmxEntries) {
+      _promptSelectPMX(pmxEntries) {
         return new Promise((resolve) => {
           const modal = document.getElementById('pmx-select-modal');
           const list = document.getElementById('pmx-select-list');
@@ -3760,39 +3877,41 @@
           const btnCancel = document.getElementById('btn-pmx-select-cancel');
           const btnClose = document.getElementById('btn-close-pmx-select');
 
-          if (!modal || !list) {
-            resolve([pmxEntries[0].file]);
-            return;
-          }
-
           list.innerHTML = '';
           pmxEntries.forEach((entry, idx) => {
             const label = document.createElement('label');
-            label.className = 'flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800/90 border border-slate-700/70 cursor-pointer text-xs';
-            const sizeMb = (entry.file.size / (1024 * 1024)).toFixed(1);
-            label.innerHTML = `
-              <input type="checkbox" value="${idx}" ${idx === 0 ? 'checked' : ''} class="pmx-choice-chk accent-sky-400 w-4 h-4 rounded" />
-              <div class="min-w-0 flex-1">
-                <div class="font-semibold text-slate-100 truncate">${entry.file.name}</div>
-                <div class="text-[10px] text-slate-400 truncate">${entry.relPath} (${sizeMb} MB)</div>
-              </div>
-            `;
+            label.className =
+              'flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-900/85 hover:bg-slate-800 border border-slate-700/70 cursor-pointer text-xs';
+            const chk = document.createElement('input');
+            chk.type = 'checkbox';
+            chk.value = String(idx);
+            chk.checked = idx === 0;
+            chk.className = 'accent-sky-400 rounded';
+
+            const span = document.createElement('span');
+            span.className = 'text-slate-100 font-medium truncate';
+            span.textContent = entry.relPath || entry.file.name;
+
+            label.append(chk, span);
             list.appendChild(label);
           });
 
-          const cleanup = (resultFiles) => {
+          const cleanup = (result) => {
             modal.classList.add('hidden');
             modal.classList.remove('flex');
             btnConfirm.onclick = null;
             btnCancel.onclick = null;
             btnClose.onclick = null;
-            resolve(resultFiles);
+            resolve(result);
           };
 
           btnConfirm.onclick = () => {
-            const checkedIndices = Array.from(list.querySelectorAll('.pmx-choice-chk:checked')).map((el) => parseInt(el.value, 10));
-            const chosen = checkedIndices.map((i) => pmxEntries[i]?.file).filter(Boolean);
-            cleanup(chosen.length > 0 ? chosen : [pmxEntries[0].file]);
+            const chosen = [];
+            list.querySelectorAll('input[type="checkbox"]:checked').forEach((c) => {
+              const i = parseInt(c.value, 10);
+              if (pmxEntries[i]) chosen.push(pmxEntries[i].file);
+            });
+            cleanup(chosen);
           };
           btnCancel.onclick = () => cleanup([]);
           btnClose.onclick = () => cleanup([]);
@@ -3802,11 +3921,196 @@
         });
       }
 
-      _syncSpawnUI() {
+      async handleIncomingFiles(inputData) {
+        const organized =
+          inputData && inputData.fileMap
+            ? inputData
+            : FolderFileCollector.fromFileList(inputData);
+
+        const { pmxEntries, motionFiles, stageFiles, fileMap } = organized;
+        if (pmxEntries.length === 0 && motionFiles.length === 0 && stageFiles.length === 0) {
+          this.showToast('対応ファイル (.pmx / .pmd / .vmd / .vpd / .glb) が見つかりませんでした', 'amber');
+          return;
+        }
+
+        let selectedPmxFiles = pmxEntries.map((e) => e.file);
+        if (pmxEntries.length > 1) {
+          selectedPmxFiles = await this._promptSelectPMX(pmxEntries);
+        }
+
+        let loadedStage = false;
+
+        // 1. Load Environment GLB if present
+        if (stageFiles.length > 0) {
+          const glbFile = stageFiles[0];
+          this._setLoading(true, `環境GLB「${glbFile.name}」を読み込み中...`, 'コライダーと地面・お化けトリガーを構築しています');
+          await new Promise((r) => setTimeout(r, 30));
+          try {
+            const info = await this.stageWorld.loadGLB(glbFile);
+            const triggerCount = this.ghostSystem.scanGLBForTriggers(info.gltfScene, info.animations, this.stageWorld);
+            loadedStage = true;
+            if (triggerCount > 0) {
+              this.showToast(`GLB内の怪異オブジェクト ${triggerCount}体を自動検出しました！`, 'purple');
+            }
+          } catch (err) {
+            console.error(err);
+            this.showToast(`環境GLBの読み込みに失敗しました: ${err.message}`, 'rose');
+          } finally {
+            this._setLoading(false);
+          }
+        }
+
+        // 2. Load PMX/PMD Characters
+        for (const pmxFile of selectedPmxFiles) {
+          this._setLoading(true, `PMX「${pmxFile.name}」を読み込み中...`, 'テクスチャ最適化とボーン・モーフ設定を行っています');
+          await new Promise((r) => setTimeout(r, 30));
+          try {
+            const cleanName = pmxFile.name.replace(/\.(pmx|pmd)$/i, '');
+            const newChar = new CharacterEntity(`char_${++this.charCounter}`, cleanName, this.scene);
+            await newChar.loadPMXFromFile(pmxFile, fileMap);
+
+            const offsetIdx = this.characters.length;
+            const spawnOffsetX = ((offsetIdx % 2 === 0 ? 1 : -1) * Math.ceil(offsetIdx / 2)) * 1.1;
+            const spawnTarget = new THREE.Vector3(
+              this.initialSpawnPos.x + spawnOffsetX,
+              this.initialSpawnPos.y,
+              this.initialSpawnPos.z
+            );
+            const safeFloor = this.stageWorld.findBestSafeFloorNear(spawnTarget.x, spawnTarget.z, spawnTarget.y, 3.5);
+            newChar.root.position.copy(safeFloor);
+            newChar.root.rotation.y = this.initialSpawnYaw;
+
+            this.characters.push(newChar);
+            this.switchActiveCharacter(this.characters.length - 1);
+            this.showToast(`キャラクター「${cleanName}」を追加しました！`, 'emerald');
+          } catch (err) {
+            console.error(err);
+            this.showToast(`PMX読み込みエラー (${pmxFile.name}): ${err.message}`, 'rose');
+          } finally {
+            this._setLoading(false);
+          }
+        }
+
+        // 3. Register VMD / VPD Motions
+        if (motionFiles.length > 0) {
+          for (const mf of motionFiles) {
+            const isVpd = mf.name.toLowerCase().endsWith('.vpd');
+            const cleanName = mf.name.replace(/\.(vmd|vpd)$/i, '');
+            this.motions.push({
+              id: `motion_${++this.motionCounter}`,
+              name: cleanName,
+              type: isVpd ? 'vpd' : 'vmd',
+              file: mf
+            });
+          }
+          this.showToast(`モーション/ポーズ ${motionFiles.length}件を追加しました`, 'purple');
+        }
+
+        if (loadedStage) {
+          // Ensure the initial spawn point sits on clear exterior ground outside the GLB building if (0,0,2.5) is inside a wall
+          const checkPos = this.initialSpawnPos;
+          const floorY = this.stageWorld.sampleStrictFloor(checkPos.x, checkPos.z, checkPos.y, 1.5);
+          const isClear = floorY !== null && this.stageWorld.isSpotClearOfObjects(checkPos.x, floorY, checkPos.z, 0.55);
+          if (!isClear) {
+            this.stageWorld.stageGroup.updateMatrixWorld(true);
+            const stageBox = new THREE.Box3().setFromObject(this.stageWorld.stageGroup);
+            const frontZ = isFinite(stageBox.max.z) ? stageBox.max.z + 2.2 : 12.0;
+            this.setInitialSpawnPoint(new THREE.Vector3(0, 0, frontZ), Math.PI);
+            this._resetActiveCharacterPosition();
+          } else {
+            this._snapAllCharactersToGround();
+          }
+          this.showToast(`環境GLB「${this.stageWorld.stageName}」を読み込みました！`, 'sky');
+        }
+
+        this._refreshAllUI();
+      }
+
+      switchActiveCharacter(index) {
+        if (index < 0 || index >= this.characters.length) return;
+        const prev = this.activeCharacter;
+        if (prev) {
+          prev.setFlashlight(false);
+          prev.setFirstPersonHidden(false);
+        }
+        this.activeCharIndex = index;
+        const next = this.activeCharacter;
+        if (next) {
+          next.setFlashlight(this.flashlightOn);
+          next.setFirstPersonHidden(this.isFirstPerson);
+          this.cameraYaw = next.root.rotation.y + Math.PI;
+        }
+        this._refreshAllUI();
+      }
+
+      removeCharacter(index) {
+        if (this.characters.length <= 1) {
+          this.showToast('最後の1体は削除できません', 'amber');
+          return;
+        }
+        const target = this.characters[index];
+        if (target) {
+          target._clearModel();
+          this.scene.remove(target.root);
+        }
+        this.characters.splice(index, 1);
+        if (this.activeCharIndex >= this.characters.length) {
+          this.activeCharIndex = this.characters.length - 1;
+        }
+        this.switchActiveCharacter(this.activeCharIndex);
+        this._refreshAllUI();
+      }
+
+      lineupCharacters() {
+        const leader = this.activeCharacter;
+        if (!leader) return;
+        const yaw = leader.root.rotation.y;
+        const rightX = Math.cos(yaw);
+        const rightZ = -Math.sin(yaw);
+
+        let slot = 1;
+        this.characters.forEach((char, idx) => {
+          if (idx === this.activeCharIndex) return;
+          const side = slot % 2 === 1 ? 1 : -1;
+          const dist = Math.ceil(slot / 2) * 1.15;
+          const tx = leader.root.position.x + rightX * side * dist;
+          const tz = leader.root.position.z + rightZ * side * dist;
+          const safe = this.stageWorld.findBestSafeFloorNear(tx, tz, leader.root.position.y, 2.5);
+          char.root.position.copy(safe);
+          char.root.rotation.y = yaw;
+          slot++;
+        });
+        this.showToast('操作キャラの横に整列しました', 'sky');
+      }
+
+      async playMotionById(motionId, modeOverride = null) {
+        const entry = this.motions.find((m) => m.id === motionId);
+        if (!entry) return;
+        const mode = modeOverride || this.motionTargetMode;
+        const targets = mode === 'all' ? this.characters : [this.activeCharacter].filter(Boolean);
+
+        for (const char of targets) {
+          try {
+            await char.applyMotion(entry);
+          } catch (err) {
+            console.error(err);
+            this.showToast(`モーション再生失敗: ${err.message}`, 'rose');
+          }
+        }
+        this._refreshAllUI();
+      }
+
+      setInitialSpawnPoint(pos, yaw = null) {
+        this.initialSpawnPos.copy(pos);
+        if (typeof yaw === 'number' && isFinite(yaw)) {
+          this.initialSpawnYaw = yaw;
+        }
+        this._updateSpawnInputsUI();
+      }
+
+      _updateSpawnInputsUI() {
         const p = this.initialSpawnPos;
         const deg = Math.round(((this.initialSpawnYaw * 180) / Math.PI) % 360);
-        const normDeg = deg < 0 ? deg + 360 : deg;
-
         const badge = document.getElementById('spawn-pos-badge');
         if (badge) badge.textContent = `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`;
 
@@ -3817,662 +4121,108 @@
         if (ix) ix.value = p.x.toFixed(2);
         if (iy) iy.value = p.y.toFixed(2);
         if (iz) iz.value = p.z.toFixed(2);
-        if (iyaw) iyaw.value = String(normDeg);
+        if (iyaw) iyaw.value = String(deg);
       }
 
-      setInitialSpawnPoint(pos, yaw = null) {
-        this.initialSpawnPos.copy(pos);
-        if (typeof yaw === 'number' && isFinite(yaw)) {
-          this.initialSpawnYaw = yaw;
-        }
-        this._syncSpawnUI();
-      }
-
-      showToast(msg, tone = 'sky', duration = 2600) {
-        const container = document.getElementById('toast-container');
-        if (!container) return;
-        const el = document.createElement('div');
-        const toneClasses = {
-          sky: 'border-sky-400/55 text-sky-100',
-          emerald: 'border-emerald-400/55 text-emerald-100',
-          violet: 'border-purple-400/55 text-purple-100',
-          pink: 'border-pink-400/55 text-pink-100',
-          rose: 'border-rose-400/60 text-rose-100'
-        };
-        el.className = `studio-panel rounded-2xl px-4 py-2 text-xs sm:text-sm font-medium ${toneClasses[tone] || toneClasses.sky} text-center transition-all duration-200 opacity-0 translate-y-2`;
-        el.textContent = msg;
-        container.appendChild(el);
-        requestAnimationFrame(() => el.classList.remove('opacity-0', 'translate-y-2'));
-        setTimeout(() => {
-          el.classList.add('opacity-0', '-translate-y-2');
-          setTimeout(() => el.remove(), 250);
-        }, duration);
-      }
-
-      _sampleGroundHeight(x, z, currentY = 0) {
-        return this.stageWorld.sampleGroundHeight(x, z, currentY);
+      _resetActiveCharacterPosition() {
+        const char = this.activeCharacter;
+        if (!char) return;
+        const floorY = this.stageWorld.sampleGroundHeight(this.initialSpawnPos.x, this.initialSpawnPos.z, this.initialSpawnPos.y + 0.5);
+        char.root.position.set(
+          this.initialSpawnPos.x,
+          floorY !== null ? floorY : this.initialSpawnPos.y,
+          this.initialSpawnPos.z
+        );
+        char.root.rotation.y = this.initialSpawnYaw;
+        char.velocityY = 0;
+        char.isGrounded = true;
+        this.cameraYaw = this.initialSpawnYaw + Math.PI;
       }
 
       _snapAllCharactersToGround() {
-        for (const ch of this.characters) {
-          const gY = this._sampleGroundHeight(ch.root.position.x, ch.root.position.z, ch.root.position.y + 3.0);
-          if (gY !== null) {
-            ch.root.position.y = gY;
+        for (const char of this.characters) {
+          const gy = this.stageWorld.sampleGroundHeight(char.root.position.x, char.root.position.z, char.root.position.y + 1.0);
+          if (gy !== null) {
+            char.root.position.y = gy;
+            char.velocityY = 0;
+            char.isGrounded = true;
           }
-          ch.velocityY = 0;
-          ch.isGrounded = true;
         }
       }
 
-      _onCharacterScaredByGhost(gimmick) {
-        const active = this.activeCharacter;
-        if (active) {
-          active.triggerScareReaction();
+      _toggleClickPlaceMode(forceVal = null) {
+        this.clickPlaceMode = forceVal !== null ? forceVal : !this.clickPlaceMode;
+        if (this.clickPlaceMode && this.spawnClickMode) {
+          this._toggleSpawnClickMode(false);
         }
-        if (this.firstPersonMode) {
-          this.cameraShakeTimer = 0.45;
+        const badge = document.getElementById('click-place-badge');
+        if (badge) {
+          badge.textContent = this.clickPlaceMode ? 'ON' : 'OFF';
+          badge.className = this.clickPlaceMode ? 'text-emerald-300 font-bold' : 'text-slate-400';
         }
-        const now = performance.now();
-        if (now - this.lastScareToastTime > 1800) {
-          this.lastScareToastTime = now;
-          const shortName = gimmick.name.split(' (')[0];
-          this.showToast(`👻 「${shortName}」が飛び出して脅かした！`, 'violet', 2000);
+        if (!this.clickPlaceMode) {
+          this.ghostSystem.setReticlePosition(null, false);
+        } else {
+          this.showToast('床をクリックすると選択した妖怪を設置します', 'purple');
         }
       }
 
-      _bindEvents() {
-        window.addEventListener('resize', () => {
-          this.camera.aspect = window.innerWidth / window.innerHeight;
-          this.camera.updateProjectionMatrix();
-          this.renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-
-        window.addEventListener('keydown', (e) => {
-          if (e.target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
-          this.keys[e.code] = true;
-
-          if (e.code === 'Space') {
-            e.preventDefault();
-            this._jumpActiveCharacter();
-          } else if (e.code === 'Tab') {
-            e.preventDefault();
-            this._cycleActiveCharacter();
-          } else if (e.code === 'KeyF') {
-            this._toggleFlashlight();
-          } else if (e.code === 'KeyV') {
-            this._toggleFirstPerson();
-          } else if (e.code === 'KeyR') {
-            this._resetActiveCharacterPosition();
-          } else if (e.code === 'Numpad9' || e.code === 'Digit9') {
-            this._toggleAutoWalk();
-          } else if (e.code === 'Numpad0' || e.code === 'Digit0') {
-            this._toggleUI();
-          } else {
-            const numMatch = e.code.match(/^(?:Digit|Numpad)([1-8])$/);
-            if (numMatch) {
-              const slotIdx = parseInt(numMatch[1], 10) - 1;
-              if (this.motions[slotIdx]) {
-                this._triggerMotion(this.motions[slotIdx]);
-              }
-            }
-          }
-        });
-
-        window.addEventListener('keyup', (e) => {
-          this.keys[e.code] = false;
-        });
-
-        const dom = this.renderer.domElement;
-        dom.addEventListener('pointerdown', (e) => {
-          if (e.button === 0) {
-            this.isOrbitDragging = true;
-            this.lastPointer = { x: e.clientX, y: e.clientY };
-          }
-        });
-        window.addEventListener('pointermove', (e) => {
-          if (!this.isOrbitDragging) return;
-          const dx = e.clientX - this.lastPointer.x;
-          const dy = e.clientY - this.lastPointer.y;
-          this.lastPointer = { x: e.clientX, y: e.clientY };
-          this.camYaw -= dx * 0.0065;
-          const minPitch = this.firstPersonMode ? -1.25 : -0.15;
-          const maxPitch = this.firstPersonMode ? 1.25 : 0.95;
-          this.camPitch = Math.max(minPitch, Math.min(maxPitch, this.camPitch + dy * 0.0055));
-        });
-        window.addEventListener('pointerup', () => {
-          this.isOrbitDragging = false;
-        });
-        dom.addEventListener('wheel', (e) => {
-          this.camDist = Math.max(1.3, Math.min(10.0, this.camDist + e.deltaY * 0.0025));
-        }, { passive: true });
-
-        document.querySelectorAll('#touch-dpad button[data-dir]').forEach((btn) => {
-          const dir = btn.dataset.dir;
-          btn.addEventListener('pointerdown', (e) => {
-            e.preventDefault();
-            this.touchMove[dir] = true;
-          });
-          ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => {
-            btn.addEventListener(ev, () => { this.touchMove[dir] = false; });
-          });
-        });
-
-        document.getElementById('btn-touch-jump')?.addEventListener('click', () => this._jumpActiveCharacter());
-        document.getElementById('btn-touch-sprint')?.addEventListener('click', (e) => {
-          this.touchSprint = !this.touchSprint;
-          e.currentTarget.textContent = `🏃 走り: ${this.touchSprint ? 'ON' : 'OFF'}`;
-        });
-
-        document.getElementById('btn-quick-next-char')?.addEventListener('click', () => this._cycleActiveCharacter());
-        document.getElementById('btn-toggle-drawer')?.addEventListener('click', () => {
-          document.getElementById('manager-drawer')?.classList.toggle('hidden');
-        });
-        document.getElementById('btn-close-drawer')?.addEventListener('click', () => {
-          document.getElementById('manager-drawer')?.classList.add('hidden');
-        });
-        document.getElementById('btn-auto-walk')?.addEventListener('click', () => this._toggleAutoWalk());
-        document.getElementById('btn-flashlight')?.addEventListener('click', () => this._toggleFlashlight());
-        document.getElementById('btn-first-person')?.addEventListener('click', () => this._toggleFirstPerson());
-        document.getElementById('btn-hide-ui')?.addEventListener('click', () => this._toggleUI());
-
-        document.getElementById('btn-expression')?.addEventListener('click', () => {
-          this.expressionIdx = (this.expressionIdx + 1) % this.expressions.length;
-          const expr = this.expressions[this.expressionIdx];
-          if (this.activeCharacter) this.activeCharacter.setExpression(expr.id);
-          document.getElementById('expression-label').textContent = expr.label;
-          this.showToast(`表情を「${expr.label}」に切り替えました`);
-        });
-
-        document.getElementById('btn-lighting')?.addEventListener('click', () => {
-          this.lightingIdx = (this.lightingIdx + 1) % this.lightingModes.length;
-          const m = this.lightingModes[this.lightingIdx];
-          this.stageWorld.setLightingMode(m.id);
-          document.getElementById('lighting-icon').textContent = m.icon;
-          document.getElementById('lighting-label').textContent = m.label;
-          this.showToast(`ライティングを「${m.label}」に変更しました`);
-        });
-
-        const setupModal = document.getElementById('setup-modal');
-        document.getElementById('btn-open-setup')?.addEventListener('click', () => setupModal?.classList.remove('hidden'));
-        document.getElementById('btn-close-setup')?.addEventListener('click', () => setupModal?.classList.add('hidden'));
-        document.getElementById('btn-start-studio')?.addEventListener('click', () => setupModal?.classList.add('hidden'));
-
-        document.querySelectorAll('.drawer-tab').forEach((tabBtn) => {
-          tabBtn.addEventListener('click', () => {
-            const target = tabBtn.dataset.tab;
-            document.querySelectorAll('.drawer-tab').forEach((b) => {
-              b.className = 'drawer-tab flex-1 py-2.5 px-2 text-slate-400 hover:text-slate-200 border-b-2 border-transparent transition';
-            });
-            tabBtn.className = 'drawer-tab flex-1 py-2.5 px-2 text-sky-300 border-b-2 border-sky-400 bg-sky-950/30 transition';
-            document.querySelectorAll('.drawer-panel').forEach((p) => p.classList.add('hidden'));
-            document.getElementById(`panel-${target}`)?.classList.remove('hidden');
-          });
-        });
-
-        const handleCharInput = async (e) => {
-          const files = e.target.files ? Array.from(e.target.files) : [];
-          e.target.value = '';
-          if (files.length > 0) {
-            await this._handleImportedPackage(FolderFileCollector.fromFileList(files));
-          }
-        };
-        document.getElementById('input-char-folder')?.addEventListener('change', handleCharInput);
-        document.getElementById('input-char-file')?.addEventListener('change', handleCharInput);
-        document.getElementById('quick-char-folder')?.addEventListener('change', handleCharInput);
-        document.getElementById('quick-char-file')?.addEventListener('change', handleCharInput);
-
-        const handleMotionInput = async (e) => {
-          const files = e.target.files ? Array.from(e.target.files) : [];
-          e.target.value = '';
-          if (files.length > 0) {
-            await this._handleImportedPackage(FolderFileCollector.fromFileList(files));
-          }
-        };
-        document.getElementById('input-motion-file')?.addEventListener('change', handleMotionInput);
-        document.getElementById('quick-motion-file')?.addEventListener('change', handleMotionInput);
-
-        const handleStageInput = async (e) => {
-          const files = e.target.files ? Array.from(e.target.files) : [];
-          e.target.value = '';
-          if (files.length > 0) {
-            await this._handleImportedPackage(FolderFileCollector.fromFileList(files));
-          }
-        };
-        document.getElementById('input-stage-glb')?.addEventListener('change', handleStageInput);
-        document.getElementById('quick-stage-file')?.addEventListener('change', handleStageInput);
-
-        const dropOverlay = document.getElementById('global-drop-overlay');
-        window.addEventListener('dragover', (e) => {
-          e.preventDefault();
-          dropOverlay?.classList.remove('hidden');
-          dropOverlay?.classList.add('flex');
-        });
-        window.addEventListener('dragleave', (e) => {
-          if (e.relatedTarget === null) {
-            dropOverlay?.classList.add('hidden');
-            dropOverlay?.classList.remove('flex');
-          }
-        });
-        window.addEventListener('drop', async (e) => {
-          e.preventDefault();
-          dropOverlay?.classList.add('hidden');
-          dropOverlay?.classList.remove('flex');
-          if (e.dataTransfer) {
-            const pkg = await FolderFileCollector.fromDataTransfer(e.dataTransfer);
-            await this._handleImportedPackage(pkg);
-          }
-        });
-
-        document.getElementById('btn-lineup-chars')?.addEventListener('click', () => {
-          const active = this.activeCharacter;
-          if (!active) return;
-          const base = active.root.position;
-          let offsetIdx = 1;
-          this.characters.forEach((ch, idx) => {
-            if (idx === this.activeCharIndex) return;
-            const side = offsetIdx % 2 === 1 ? 1 : -1;
-            const dist = Math.ceil(offsetIdx / 2) * 1.25;
-            ch.root.position.set(base.x + side * dist, base.y, base.z);
-            ch.root.rotation.y = active.root.rotation.y;
-            offsetIdx++;
-          });
-          this._snapAllCharactersToGround();
-          this.showToast('全員を操作キャラの横に整列しました');
-        });
-
-        document.getElementById('btn-all-chars-walk')?.addEventListener('click', () => {
-          this.characters.forEach((ch) => ch.stopMotionToWalk());
-          this._refreshAllUI();
-          this.showToast('全員のモーションを解除し歩行状態に戻しました');
-        });
-
-        document.getElementById('target-mode-active')?.addEventListener('click', () => {
-          this.motionTargetMode = 'active';
-          document.getElementById('target-mode-active').className = 'px-2 py-0.5 rounded-md bg-sky-600 text-white font-semibold transition';
-          document.getElementById('target-mode-all').className = 'px-2 py-0.5 rounded-md text-slate-400 hover:text-white transition';
-        });
-        document.getElementById('target-mode-all')?.addEventListener('click', () => {
-          this.motionTargetMode = 'all';
-          document.getElementById('target-mode-all').className = 'px-2 py-0.5 rounded-md bg-sky-600 text-white font-semibold transition';
-          document.getElementById('target-mode-active').className = 'px-2 py-0.5 rounded-md text-slate-400 hover:text-white transition';
-        });
-
-        document.getElementById('btn-batch-play')?.addEventListener('click', () => {
-          const targets = this.motionTargetMode === 'all' ? this.characters : [this.activeCharacter].filter(Boolean);
-          targets.forEach((ch) => ch.resumeMotion());
-          this._refreshAllUI();
-        });
-        document.getElementById('btn-batch-pause')?.addEventListener('click', () => {
-          const targets = this.motionTargetMode === 'all' ? this.characters : [this.activeCharacter].filter(Boolean);
-          targets.forEach((ch) => ch.pauseMotion());
-          this._refreshAllUI();
-        });
-        document.getElementById('btn-batch-stop')?.addEventListener('click', () => {
-          const targets = this.motionTargetMode === 'all' ? this.characters : [this.activeCharacter].filter(Boolean);
-          targets.forEach((ch) => ch.stopMotionToWalk());
-          this._refreshAllUI();
-        });
-
-        const resetToGarden = () => {
-          this.stageWorld.buildDefaultGarden();
-          this.ghostSystem.clearAll();
-          document.getElementById('stage-status').textContent = '現在：標準テラス庭園';
-          document.getElementById('drawer-stage-status').textContent = '現在：標準テラス庭園 (階段・橋・スロープ)';
-          document.getElementById('hud-stage-name').textContent = '標準テラス庭園';
-          this.setInitialSpawnPoint(new THREE.Vector3(0, 0, 2.5), Math.PI);
-          this._resetActiveCharacterPosition();
-          this._updateGhostCountLabel();
-          this.showToast('標準テラス庭園に戻しました');
-        };
-        document.getElementById('btn-reset-stage')?.addEventListener('click', resetToGarden);
-        document.getElementById('btn-drawer-reset-stage')?.addEventListener('click', resetToGarden);
-        document.getElementById('btn-drawer-reset-pos')?.addEventListener('click', () => this._resetActiveCharacterPosition());
-
-        // Initial Spawn Position Controls
-        document.getElementById('btn-set-spawn-here')?.addEventListener('click', () => {
-          const active = this.activeCharacter;
-          if (!active) return;
-          this.setInitialSpawnPoint(active.root.position, active.root.rotation.y);
-          this.showToast(
-            `📍 初期位置を (${this.initialSpawnPos.x.toFixed(1)}, ${this.initialSpawnPos.y.toFixed(1)}, ${this.initialSpawnPos.z.toFixed(1)}) に保存しました！`,
-            'sky',
-            2400
-          );
-        });
-
-        document.getElementById('btn-apply-spawn-inputs')?.addEventListener('click', () => {
-          const x = parseFloat(document.getElementById('input-spawn-x')?.value ?? '0') || 0;
-          const y = parseFloat(document.getElementById('input-spawn-y')?.value ?? '0') || 0;
-          const z = parseFloat(document.getElementById('input-spawn-z')?.value ?? '2.5') || 0;
-          const deg = parseFloat(document.getElementById('input-spawn-yaw')?.value ?? '180') || 0;
-          const rad = (deg * Math.PI) / 180;
-          this.setInitialSpawnPoint(new THREE.Vector3(x, y, z), rad);
-          this._resetActiveCharacterPosition();
-        });
-
-        const toggleSpawnClickBtn = document.getElementById('btn-toggle-spawn-click');
-        const spawnClickBadge = document.getElementById('spawn-click-badge');
-        const setSpawnClickMode = (enabled) => {
-          this.spawnClickPlacementMode = enabled;
-          if (spawnClickBadge) {
-            spawnClickBadge.textContent = enabled ? 'ON' : 'OFF';
-            spawnClickBadge.className = enabled ? 'text-cyan-300 font-bold' : 'text-slate-400';
-          }
-          if (toggleSpawnClickBtn) {
-            if (enabled) {
-              toggleSpawnClickBtn.classList.add('bg-cyan-950/80', 'border-cyan-400');
-            } else {
-              toggleSpawnClickBtn.classList.remove('bg-cyan-950/80', 'border-cyan-400');
-            }
-          }
-          if (!enabled && !this.ghostClickPlacementMode) {
-            this.ghostSystem.setReticlePosition(null, false);
-          }
-        };
-
-        toggleSpawnClickBtn?.addEventListener('click', () => {
-          const next = !this.spawnClickPlacementMode;
-          if (next && this.ghostClickPlacementMode) {
-            this.ghostClickPlacementMode = false;
-            const gb = document.getElementById('click-place-badge');
-            if (gb) {
-              gb.textContent = 'OFF';
-              gb.className = 'text-slate-400';
-            }
-            document.getElementById('btn-toggle-click-place')?.classList.remove('bg-emerald-950/80', 'border-emerald-400');
-          }
-          setSpawnClickMode(next);
-          if (next) {
-            this.showToast('🎯 初期位置の地面クリック指定モード ON！床をクリックしてスタート地点を設定できます', 'sky', 3200);
-          }
-        });
-
-        const syncStageScale = (val) => {
-          const s = parseFloat(val) || 1.0;
-          this.stageWorld.applyScale(s);
-          document.getElementById('stage-scale-slider').value = s;
-          document.getElementById('drawer-stage-scale').value = s;
-          document.getElementById('stage-scale-val').textContent = `${s.toFixed(1)}x`;
-          document.getElementById('drawer-scale-val').textContent = `${s.toFixed(1)}x`;
-          this._snapAllCharactersToGround();
-        };
-        document.getElementById('stage-scale-slider')?.addEventListener('input', (e) => syncStageScale(e.target.value));
-        document.getElementById('drawer-stage-scale')?.addEventListener('input', (e) => syncStageScale(e.target.value));
-
-        const buildHauntedHouse = () => {
-          this.stageWorld.buildHauntedHouseStage();
-          this.ghostSystem.clearAll();
-          document.getElementById('stage-status').textContent = '現在：和風お化け屋敷 (内蔵ステージ)';
-          document.getElementById('drawer-stage-status').textContent = '現在：和風お化け屋敷 (障子・鳥居・お札・廊下)';
-          document.getElementById('hud-stage-name').textContent = '和風お化け屋敷';
-          this.setInitialSpawnPoint(new THREE.Vector3(0, 0, 7.2), Math.PI);
-          this._resetActiveCharacterPosition();
-          const refFootY = this.activeCharacter ? this.activeCharacter.root.position.y : 0;
-          this.ghostSystem.spawnJapaneseGhosts(7, this.stageWorld, refFootY);
-          this._updateGhostCountLabel();
-          this.showToast('🏯 和風お化け屋敷を生成し、足元出現ポイントに7種の妖怪を設置しました！', 'violet', 3200);
-        };
-        document.getElementById('btn-build-haunted-stage')?.addEventListener('click', buildHauntedHouse);
-        document.getElementById('btn-build-haunted-stage-main')?.addEventListener('click', buildHauntedHouse);
-
-        document.querySelectorAll('.ghost-variant-opt').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            this.selectedGhostVariant = btn.dataset.variant || 'lantern';
-            document.querySelectorAll('.ghost-variant-opt').forEach((b) => {
-              b.className = 'ghost-variant-opt py-1.5 px-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-600/50 transition truncate';
-            });
-            btn.className = 'ghost-variant-opt py-1.5 px-1 rounded-lg bg-purple-900/90 text-white border-2 border-purple-400 font-bold transition truncate';
-          });
-        });
-
-        const spawnCustomGhostAt = (pos) => {
-          const motionSelect = document.getElementById('select-ghost-motion');
-          const motionType = motionSelect ? motionSelect.value : 'burst';
-          const refFootY = this.activeCharacter ? this.activeCharacter.root.position.y : pos.y;
-          const g = this.ghostSystem.spawnSingleGhost(
-            this.selectedGhostVariant,
-            pos,
-            this.stageWorld,
-            motionType,
-            refFootY
-          );
-          this._updateGhostCountLabel();
-          const motionLabel = GhostGimmickSystem.MOTION_PRESETS.find((m) => m.id === motionType)?.label || motionType;
-          this.showToast(`👻 「${g.name}」の足元ポイントを【${motionLabel}】で設置しました！`, 'violet', 2400);
-        };
-
-        document.getElementById('btn-spawn-in-front')?.addEventListener('click', () => {
-          const active = this.activeCharacter;
-          const spawnPos = new THREE.Vector3(0, 0, 0);
-          if (active) {
-            const yaw = active.root.rotation.y;
-            spawnPos.copy(active.root.position).add(
-              new THREE.Vector3(Math.sin(yaw) * 2.5, 0, Math.cos(yaw) * 2.5)
-            );
-          }
-          spawnCustomGhostAt(spawnPos);
-        });
-
-        const toggleClickPlaceBtn = document.getElementById('btn-toggle-click-place');
-        const clickPlaceBadge = document.getElementById('click-place-badge');
-        toggleClickPlaceBtn?.addEventListener('click', () => {
-          this.ghostClickPlacementMode = !this.ghostClickPlacementMode;
-          if (this.ghostClickPlacementMode && this.spawnClickPlacementMode) {
-            setSpawnClickMode(false);
-          }
-          if (clickPlaceBadge) {
-            clickPlaceBadge.textContent = this.ghostClickPlacementMode ? 'ON' : 'OFF';
-            clickPlaceBadge.className = this.ghostClickPlacementMode ? 'text-emerald-300 font-bold' : 'text-slate-400';
-          }
-          if (this.ghostClickPlacementMode) {
-            toggleClickPlaceBtn.classList.add('bg-emerald-950/80', 'border-emerald-400');
-            this.showToast('🎯 床クリック設置モード ON！足元にお化け出現ポイントを設置できます', 'emerald', 3200);
-          } else {
-            toggleClickPlaceBtn.classList.remove('bg-emerald-950/80', 'border-emerald-400');
-            this.ghostSystem.setReticlePosition(null, false);
-            this.showToast('床クリック設置モードを OFF にしました', 'sky', 1800);
-          }
-        });
-
-        const placeRaycaster = new THREE.Raycaster();
-        const placeMouse = new THREE.Vector2();
-        let downScreenPos = null;
-
-        const raycastStageFloor = (clientX, clientY) => {
-          const rect = this.renderer.domElement.getBoundingClientRect();
-          placeMouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-          placeMouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-          placeRaycaster.setFromCamera(placeMouse, this.camera);
-          const hits = placeRaycaster.intersectObjects(this.stageWorld.colliders, true);
-          if (hits.length > 0) {
-            const floorHit = hits.find((h) => {
-              if (!h.face) return true;
-              const worldN = h.face.normal.clone().transformDirection(h.object.matrixWorld);
-              return worldN.y > 0.72;
-            });
-            const rawPt = (floorHit || hits[0]).point;
-            const refFootY = this.activeCharacter ? this.activeCharacter.root.position.y : rawPt.y;
-            return this.stageWorld.findBestSafeFloorNear(rawPt.x, rawPt.z, refFootY, 2.5);
-          }
-          return null;
-        };
-
-        dom.addEventListener('pointermove', (e) => {
-          if (!this.ghostClickPlacementMode && !this.spawnClickPlacementMode) return;
-          const pt = raycastStageFloor(e.clientX, e.clientY);
-          this.ghostSystem.setReticlePosition(pt, Boolean(pt));
-        });
-
-        dom.addEventListener('pointerdown', (e) => {
-          if (e.button === 0) {
-            downScreenPos = { x: e.clientX, y: e.clientY };
-          }
-        });
-
-        dom.addEventListener('pointerup', (e) => {
-          if ((!this.ghostClickPlacementMode && !this.spawnClickPlacementMode) || e.button !== 0 || !downScreenPos) return;
-          const moveDist = Math.hypot(e.clientX - downScreenPos.x, e.clientY - downScreenPos.y);
-          downScreenPos = null;
-          if (moveDist < 6) {
-            const pt = raycastStageFloor(e.clientX, e.clientY);
-            if (pt) {
-              if (this.spawnClickPlacementMode) {
-                this.setInitialSpawnPoint(pt);
-                this._resetActiveCharacterPosition();
-                setSpawnClickMode(false);
-              } else {
-                spawnCustomGhostAt(pt);
-              }
-            }
-          }
-        });
-
-        document.getElementById('btn-spawn-ghosts-7')?.addEventListener('click', () => {
-          const refFootY = this.activeCharacter ? this.activeCharacter.root.position.y : 0;
-          const placed = this.ghostSystem.spawnJapaneseGhosts(7, this.stageWorld, refFootY);
-          this._updateGhostCountLabel();
-          this.showToast(`👻 曲がり角や通路の足元ポイントに ${placed}体 の妖怪を設置しました！`, 'violet');
-        });
-
-        document.getElementById('btn-spawn-ghosts-12')?.addEventListener('click', () => {
-          const refFootY = this.activeCharacter ? this.activeCharacter.root.position.y : 0;
-          const placed = this.ghostSystem.spawnJapaneseGhosts(12, this.stageWorld, refFootY);
-          this._updateGhostCountLabel();
-          this.showToast(`👻👻 曲がり角や通路の足元ポイントに ${placed}体 の妖怪を設置しました！`, 'violet');
-        });
-
-        document.getElementById('btn-clear-spawned-ghosts')?.addEventListener('click', () => {
-          this.ghostSystem.clearSpawnedGhosts();
-          this._updateGhostCountLabel();
-          this.showToast('設置した和風おばけを解除しました', 'sky');
-        });
-
-        document.getElementById('ghost-trigger-radius')?.addEventListener('input', (e) => {
-          const r = parseFloat(e.target.value) || 1.8;
-          document.getElementById('ghost-radius-val').textContent = `${r.toFixed(1)}m`;
-          this.ghostSystem.setTriggerRadius(r);
-        });
-
-        document.getElementById('chk-ghost-show-pads')?.addEventListener('change', (e) => {
-          this.ghostSystem.setShowSpawnPads(Boolean(e.target.checked));
-        });
-
-        document.getElementById('chk-ghost-stealth')?.addEventListener('change', (e) => {
-          const stealth = Boolean(e.target.checked);
-          this.ghostSystem.setStealthMode(stealth);
-          this.showToast(
-            stealth
-              ? '👻 ステルス潜伏ON：足元ポイントに触れた瞬間だけお化けが出現します'
-              : '👁️ 常時表示ON：お化けの本体を常時表示します',
-            'violet',
-            2200
-          );
-        });
-
-        document.getElementById('chk-ghost-sound')?.addEventListener('change', (e) => {
-          this.ghostSystem.soundEnabled = Boolean(e.target.checked);
-        });
-
-        document.getElementById('btn-test-all-ghosts')?.addEventListener('click', () => {
-          if (this.ghostSystem.gimmicks.length === 0) {
-            const refFootY = this.activeCharacter ? this.activeCharacter.root.position.y : 0;
-            this.ghostSystem.spawnJapaneseGhosts(7, this.stageWorld, refFootY);
-            this._updateGhostCountLabel();
-          }
-          this.ghostSystem._playJapaneseScareSound('yurei');
-          this.ghostSystem.triggerAllNow((g) => this._onCharacterScaredByGhost(g));
-          this.showToast('⚡ 全妖怪ギミックを一斉に発動しました！', 'rose');
-        });
-
-        document.getElementById('btn-export-haunted-glb')?.addEventListener('click', () => {
-          this._exportHauntedHouseGLB();
-        });
-
-        // Lip-Sync Controls
-        document.getElementById('btn-lipsync-toggle')?.addEventListener('click', () => {
-          document.getElementById('lipsync-panel')?.classList.toggle('hidden');
-        });
-        document.getElementById('btn-close-lipsync')?.addEventListener('click', () => {
-          document.getElementById('lipsync-panel')?.classList.add('hidden');
-        });
-
-        this.lipSync.onStateChange = (mode, label) => {
-          const badge = document.getElementById('lipsync-badge');
-          const micBtnLabel = document.getElementById('mic-btn-label');
-          if (badge) {
-            badge.textContent = label;
-            badge.className =
-              mode === 'idle'
-                ? 'text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300'
-                : 'text-[11px] px-1.5 py-0.5 rounded bg-pink-600 text-white font-bold';
-          }
-          if (micBtnLabel) {
-            micBtnLabel.textContent = mode === 'mic' ? 'マイク入力を停止' : 'マイク入力を開始';
-          }
-        };
-
-        document.getElementById('btn-mic-toggle')?.addEventListener('click', async () => {
-          if (this.lipSync.mode === 'mic') {
-            this.lipSync.stop();
-          } else {
-            try {
-              await this.lipSync.startMicrophone();
-              this.showToast('🎤 マイク音声リップシンクを開始しました', 'pink');
-            } catch (_) {
-              this.showToast('マイクへのアクセスが許可されませんでした', 'rose');
-            }
-          }
-        });
-
-        document.getElementById('btn-lipsync-stop')?.addEventListener('click', () => {
-          this.lipSync.stop();
-          this.showToast('リップシンクを停止しました');
-        });
-
-        document.getElementById('input-audio-file')?.addEventListener('change', (e) => {
-          const file = e.target.files?.[0];
-          if (!file) return;
-          const player = document.getElementById('lipsync-audio-player');
-          if (player) {
-            player.src = URL.createObjectURL(file);
-            player.classList.remove('hidden');
-            this.lipSync.attachAudioElement(player);
-            player.play().catch(() => {});
-            this.showToast(`🎵 音声「${file.name}」でリップシンク再生中`, 'pink');
-          }
-        });
-
-        document.getElementById('btn-test-speech')?.addEventListener('click', () => {
-          this.lipSync.startSynthDemo();
-          this.showToast('🗣️ テスト発話「あ・い・う・え・お」を再生中', 'pink');
-        });
+      _toggleSpawnClickMode(forceVal = null) {
+        this.spawnClickMode = forceVal !== null ? forceVal : !this.spawnClickMode;
+        if (this.spawnClickMode && this.clickPlaceMode) {
+          this._toggleClickPlaceMode(false);
+        }
+        const badge = document.getElementById('spawn-click-badge');
+        if (badge) {
+          badge.textContent = this.spawnClickMode ? 'ON' : 'OFF';
+          badge.className = this.spawnClickMode ? 'text-cyan-300 font-bold' : 'text-slate-400';
+        }
+        if (!this.spawnClickMode) {
+          this.ghostSystem.setReticlePosition(null, false);
+        } else {
+          this.showToast('床をクリックすると初期位置（スタート地点）を設定します', 'sky');
+        }
       }
 
-      async _exportHauntedHouseGLB() {
+      _spawnGhostInFront() {
+        const char = this.activeCharacter;
+        if (!char) return;
+        const yaw = char.root.rotation.y;
+        const target = new THREE.Vector3(
+          char.root.position.x + Math.sin(yaw) * 2.2,
+          char.root.position.y,
+          char.root.position.z + Math.cos(yaw) * 2.2
+        );
+        const g = this.ghostSystem.spawnSingleGhost(
+          this.selectedGhostVariant,
+          target,
+          this.stageWorld,
+          this.selectedGhostMotion,
+          char.root.position.y
+        );
+        this.showToast(`「${g.name}」の出現ポイントを設置しました`, 'purple');
+        this._refreshAllUI();
+      }
+
+      async _exportHauntedGLB() {
         try {
-          this.showToast('📦 お化け屋敷GLBデータを生成中...', 'sky', 2200);
+          this._setLoading(true, 'お化け屋敷GLBを書き出し中...', 'ステージと配置した妖怪アニメーションを統合しています');
+          await new Promise((r) => setTimeout(r, 40));
+
           const exportRoot = new THREE.Group();
-          exportRoot.name = 'HauntedHouse_ExportScene';
+          exportRoot.name = 'HauntedHouseExportRoot';
 
           const stageClone = this.stageWorld.stageGroup.clone(true);
-          exportRoot.add(stageClone);
-
-          const prevVisibility = this.ghostSystem.gimmicks.map((g) => g.node.visible);
-          this.ghostSystem.gimmicks.forEach((g) => {
-            g.node.visible = true;
-          });
           const ghostsClone = this.ghostSystem.spawnedGroup.clone(true);
-          exportRoot.add(ghostsClone);
-          this.ghostSystem.gimmicks.forEach((g, idx) => {
-            g.node.visible = prevVisibility[idx];
-          });
+          ghostsClone.traverse((o) => { o.visible = true; });
+          exportRoot.add(stageClone, ghostsClone);
 
           const animations = this.ghostSystem.buildExportableAnimations();
           const exporter = new GLTFExporter();
           const glbBuffer = await new Promise((resolve, reject) => {
             exporter.parse(
               exportRoot,
-              (result) => resolve(result),
+              (res) => resolve(res),
               (err) => reject(err),
               { binary: true, animations }
             );
@@ -4482,261 +4232,256 @@
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          const ghostCount = this.ghostSystem.gimmicks.length;
-          a.download = `haunted_house_${ghostCount}ghosts.glb`;
+          a.download = `haunted_stage_${this.ghostSystem.gimmicks.length}ghosts.glb`;
           document.body.appendChild(a);
           a.click();
           a.remove();
           setTimeout(() => URL.revokeObjectURL(url), 5000);
 
-          this.showToast(`✅ 「haunted_house_${ghostCount}ghosts.glb」を書き出しました！`, 'emerald', 3200);
+          this.showToast('GLBファイルをダウンロードしました！', 'emerald');
         } catch (err) {
           console.error(err);
-          this.showToast('GLB出力中にエラーが発生しました', 'rose');
+          this.showToast(`GLB出力エラー: ${err.message}`, 'rose');
+        } finally {
+          this._setLoading(false);
         }
       }
 
-      _updateGhostCountLabel() {
-        const count = this.ghostSystem.gimmicks.length;
-        const badge = document.getElementById('ghost-gimmick-count');
-        if (badge) badge.textContent = `${count}体稼働中`;
-        const expBadge = document.getElementById('export-summary-badge');
-        if (expBadge) expBadge.textContent = `ステージ + ${count}体`;
+      _refreshAllUI() {
+        const active = this.activeCharacter;
+        document.getElementById('hud-active-char').textContent = active ? active.name : 'なし';
+        document.getElementById('hud-stage-name').textContent = this.stageWorld.stageName;
+        document.getElementById('hud-ground-y').textContent = `${active ? active.root.position.y.toFixed(2) : '0.00'}m`;
+
+        let motionLabel = '状態: 歩行/待機';
+        if (active) {
+          if (active.motionState === 'vmd_playing') motionLabel = `▶ VMD: ${active.currentMotionName}`;
+          else if (active.motionState === 'vmd_paused') motionLabel = `⏸ 一時停止: ${active.currentMotionName}`;
+          else if (active.motionState === 'vpd_pose') motionLabel = `🧍 ポーズ: ${active.currentMotionName}`;
+        }
+        document.getElementById('hud-active-motion').textContent = motionLabel;
+
+        document.getElementById('badge-counts').textContent = `${this.characters.length}体 / ${this.motions.length}件`;
+        document.getElementById('tab-char-count').textContent = String(this.characters.length);
+        document.getElementById('tab-motion-count').textContent = String(this.motions.length);
+        document.getElementById('modal-char-status').textContent = `登録済: ${this.characters.length}体`;
+        document.getElementById('modal-motion-status').textContent = `登録済: ${this.motions.length}件`;
+        document.getElementById('stage-status').textContent = `現在：${this.stageWorld.stageName}`;
+        document.getElementById('drawer-stage-status').textContent = `現在：${this.stageWorld.stageName}`;
+
+        const ghostCount = this.ghostSystem.gimmicks.length;
+        document.getElementById('ghost-gimmick-count').textContent = `${ghostCount}体稼働中`;
+        document.getElementById('export-summary-badge').textContent = `ステージ + ${ghostCount}体`;
+
+        this._renderCharacterList();
+        this._renderMotionList();
+        this._renderHotkeyQuickbar();
         this._renderPlacedGhostList();
       }
 
+      _renderCharacterList() {
+        const list = document.getElementById('character-list');
+        if (!list) return;
+        list.innerHTML = '';
+
+        this.characters.forEach((char, idx) => {
+          const isActive = idx === this.activeCharIndex;
+          const card = document.createElement('div');
+          card.className = `rounded-xl p-2.5 border transition flex items-center justify-between gap-2 ${
+            isActive
+              ? 'bg-sky-950/75 border-sky-400/60 shadow-md'
+              : 'bg-slate-900/75 border-slate-700/60 hover:border-slate-500/60'
+          }`;
+
+          const info = document.createElement('div');
+          info.className = 'min-w-0 flex-1';
+          const title = document.createElement('div');
+          title.className = 'text-xs font-bold text-white truncate flex items-center gap-1.5';
+          title.textContent = `${isActive ? '🎮 ' : ''}${char.name}`;
+
+          const sub = document.createElement('div');
+          sub.className = 'text-[10px] text-slate-400 mt-0.5 truncate';
+          const ikBadge = char.hasFootAndToeIK ? 'IK歩行対応' : '標準ボーン';
+          const mState =
+            char.motionState === 'walk'
+              ? '歩行/待機'
+              : `${char.currentMotionName}`;
+          sub.textContent = `${char.isPMX ? 'PMX' : '標準'} ・ ${ikBadge} ・ ${mState}`;
+          info.append(title, sub);
+
+          const actions = document.createElement('div');
+          actions.className = 'flex items-center gap-1 shrink-0';
+
+          if (!isActive) {
+            const btnRide = document.createElement('button');
+            btnRide.className =
+              'px-2 py-1 rounded-lg bg-sky-700 hover:bg-sky-600 text-[11px] font-semibold text-white transition';
+            btnRide.textContent = '乗り移り';
+            btnRide.onclick = () => this.switchActiveCharacter(idx);
+            actions.appendChild(btnRide);
+          }
+
+          if (this.characters.length > 1) {
+            const btnDel = document.createElement('button');
+            btnDel.className =
+              'px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-900/80 text-[11px] text-slate-300 hover:text-rose-200 border border-slate-600/50 transition';
+            btnDel.textContent = '削除';
+            btnDel.onclick = () => this.removeCharacter(idx);
+            actions.appendChild(btnDel);
+          }
+
+          card.append(info, actions);
+          list.appendChild(card);
+        });
+      }
+
+      _renderMotionList() {
+        const list = document.getElementById('motion-list');
+        if (!list) return;
+        list.innerHTML = '';
+
+        if (this.motions.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'text-center text-xs text-slate-400 py-6 bg-slate-950/50 rounded-xl border border-slate-800';
+          empty.textContent = '上のボタンまたはドラッグ＆ドロップで .vmd / .vpd を追加してください';
+          list.appendChild(empty);
+          return;
+        }
+
+        this.motions.forEach((m, idx) => {
+          const card = document.createElement('div');
+          card.className =
+            'rounded-xl p-2.5 bg-slate-900/80 border border-slate-700/60 flex items-center justify-between gap-2';
+
+          const left = document.createElement('div');
+          left.className = 'min-w-0 flex-1';
+          const hotkeyBadge = idx < 8 ? `[${idx + 1}] ` : '';
+          const title = document.createElement('div');
+          title.className = 'text-xs font-semibold text-slate-100 truncate';
+          title.textContent = `${hotkeyBadge}${m.name}`;
+
+          const sub = document.createElement('div');
+          sub.className = 'text-[10px] text-violet-300';
+          sub.textContent = m.type === 'vpd' ? 'VPD ポーズ' : 'VMD モーション';
+          left.append(title, sub);
+
+          const btnPlay = document.createElement('button');
+          btnPlay.className =
+            'px-2.5 py-1 rounded-lg bg-violet-700 hover:bg-violet-600 text-[11px] font-bold text-white shrink-0 transition';
+          btnPlay.textContent = '▶ 適用';
+          btnPlay.onclick = () => this.playMotionById(m.id);
+
+          card.append(left, btnPlay);
+          list.appendChild(card);
+        });
+      }
+
+      _renderHotkeyQuickbar() {
+        const bar = document.getElementById('hotkey-quickbar');
+        if (!bar) return;
+        bar.innerHTML = '';
+
+        for (let i = 0; i < 8; i++) {
+          const m = this.motions[i];
+          const btn = document.createElement('button');
+          const activeChar = this.activeCharacter;
+          const isPlayingThis = activeChar && m && activeChar.currentMotionId === m.id && activeChar.motionState !== 'walk';
+
+          btn.className = m
+            ? isPlayingThis
+              ? 'px-2.5 py-1 rounded-xl bg-violet-600 text-white text-[11px] font-bold border border-violet-300 whitespace-nowrap transition'
+              : 'px-2.5 py-1 rounded-xl bg-slate-800/90 hover:bg-violet-900/70 text-slate-100 text-[11px] font-medium border border-slate-600/60 whitespace-nowrap transition'
+            : 'px-2 py-1 rounded-xl bg-slate-900/60 text-slate-500 text-[11px] border border-slate-800 whitespace-nowrap';
+
+          btn.textContent = m ? `${i + 1} ${m.name.slice(0, 7)}` : `${i + 1} 空`;
+          if (m) {
+            btn.title = `${m.name} (テンキー${i + 1})`;
+            btn.onclick = () => this.playMotionById(m.id, 'active');
+          }
+          bar.appendChild(btn);
+        }
+
+        const btnAuto = document.createElement('button');
+        btnAuto.className = this.autoWalkEnabled
+          ? 'px-2.5 py-1 rounded-xl bg-emerald-600 text-white text-[11px] font-bold border border-emerald-300 whitespace-nowrap transition'
+          : 'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] border border-slate-600/60 whitespace-nowrap transition';
+        btnAuto.textContent = '9 自動歩行';
+        btnAuto.onclick = () => this._toggleAutoWalk();
+        bar.appendChild(btnAuto);
+
+        const btnFpv = document.createElement('button');
+        btnFpv.className = this.isFirstPerson
+          ? 'px-2.5 py-1 rounded-xl bg-cyan-600 text-white text-[11px] font-bold border border-cyan-300 whitespace-nowrap transition'
+          : 'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] border border-slate-600/60 whitespace-nowrap transition';
+        btnFpv.textContent = 'V 一人称視点';
+        btnFpv.onclick = () => this._toggleFirstPerson();
+        bar.appendChild(btnFpv);
+
+        const btnHide = document.createElement('button');
+        btnHide.className =
+          'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] border border-slate-600/60 whitespace-nowrap transition';
+        btnHide.textContent = '0 UI隠す';
+        btnHide.onclick = () => this._toggleHideUI();
+        bar.appendChild(btnHide);
+      }
+
       _renderPlacedGhostList() {
-        const listEl = document.getElementById('placed-ghost-list');
-        if (!listEl) return;
+        const list = document.getElementById('placed-ghost-list');
+        if (!list) return;
+        list.innerHTML = '';
 
         if (this.ghostSystem.gimmicks.length === 0) {
-          listEl.innerHTML = `
-            <div class="text-[10px] text-slate-500 text-center py-2 bg-slate-950/50 rounded-lg border border-slate-800/80">
-              まだ設置されていません（床クリックまたは「目の前の床に設置」で追加）
-            </div>
-          `;
+          const empty = document.createElement('div');
+          empty.className = 'text-[10px] text-slate-500 text-center py-2 bg-slate-950/50 rounded-lg border border-slate-800/80';
+          empty.textContent = 'まだ設置されていません（床クリックまたは「目の前の床に設置」で追加）';
+          list.appendChild(empty);
           return;
         }
 
         const presets = GhostGimmickSystem.MOTION_PRESETS;
-        listEl.innerHTML = '';
-
-        this.ghostSystem.gimmicks.forEach((g, idx) => {
+        this.ghostSystem.gimmicks.forEach((g) => {
           const row = document.createElement('div');
-          row.className = 'rounded-lg bg-slate-950/85 border border-purple-500/25 p-1.5 flex flex-col gap-1 text-[10px]';
-          const shortName = g.name.split(' (')[0];
-          const optionsHtml = presets
-            .map((p) => `<option value="${p.id}" ${g.motionType === p.id ? 'selected' : ''}>${p.label}</option>`)
-            .join('');
+          row.className =
+            'rounded-lg bg-slate-950/80 border border-slate-800 p-1.5 flex items-center justify-between gap-1 text-[10px]';
 
-          row.innerHTML = `
-            <div class="flex items-center justify-between gap-1">
-              <span class="font-semibold text-purple-200 truncate">#${idx + 1} ${shortName}</span>
-              <span class="text-[9px] text-slate-400 font-mono">(${g.basePos.x.toFixed(1)}, ${g.basePos.y.toFixed(1)}, ${g.basePos.z.toFixed(1)})</span>
-            </div>
-            <div class="flex items-center gap-1">
-              <select data-gid="${g.id}" class="ghost-item-motion-sel flex-1 rounded bg-slate-900 border border-slate-700 text-slate-200 px-1.5 py-0.5 text-[10px] focus:outline-none focus:border-purple-400">
-                ${optionsHtml}
-              </select>
-              <button data-gid="${g.id}" class="ghost-item-test-btn px-1.5 py-0.5 rounded bg-rose-950/80 hover:bg-rose-800/80 text-rose-200 border border-rose-500/35" title="このオバケだけテスト発動">⚡</button>
-              <button data-gid="${g.id}" class="ghost-item-tp-btn px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-sky-200 border border-slate-600/50" title="このオバケの近くへ移動">📍</button>
-              <button data-gid="${g.id}" class="ghost-item-del-btn px-1.5 py-0.5 rounded bg-slate-900 hover:bg-rose-950 text-slate-400 hover:text-rose-300 border border-slate-700" title="削除">✕</button>
-            </div>
-          `;
-          listEl.appendChild(row);
-        });
+          const label = document.createElement('span');
+          label.className = 'text-purple-200 font-medium truncate flex-1';
+          label.textContent = `${g.name} (${g.basePos.x.toFixed(1)}, ${g.basePos.y.toFixed(1)}, ${g.basePos.z.toFixed(1)})`;
 
-        listEl.querySelectorAll('.ghost-item-motion-sel').forEach((sel) => {
-          sel.addEventListener('change', (e) => {
-            const gid = e.target.dataset.gid;
-            const newMotion = e.target.value;
-            this.ghostSystem.setGimmickMotion(gid, newMotion);
-            const label = presets.find((p) => p.id === newMotion)?.label || newMotion;
-            this.showToast(`モーションを【${label}】に変更しました`, 'violet', 1600);
+          const sel = document.createElement('select');
+          sel.className = 'bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-slate-200 max-w-[95px]';
+          presets.forEach((p) => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = p.label;
+            if (p.id === g.motionType) opt.selected = true;
+            sel.appendChild(opt);
           });
-        });
+          sel.onchange = () => {
+            this.ghostSystem.setGimmickMotion(g.id, sel.value);
+          };
 
-        listEl.querySelectorAll('.ghost-item-test-btn').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            this.ghostSystem.triggerSingleById(btn.dataset.gid, (g) => this._onCharacterScaredByGhost(g));
-          });
-        });
-
-        listEl.querySelectorAll('.ghost-item-tp-btn').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            const target = this.ghostSystem.gimmicks.find((item) => item.id === btn.dataset.gid);
-            const active = this.activeCharacter;
-            if (target && active) {
-              active.root.position.set(target.basePos.x, target.basePos.y, target.basePos.z + 2.4);
-              active.velocityY = 0;
-              active.isGrounded = true;
-              this.showToast(`📍 「${target.name.split(' (')[0]}」の近くへ移動しました`, 'sky', 1600);
-            }
-          });
-        });
-
-        listEl.querySelectorAll('.ghost-item-del-btn').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            this.ghostSystem.removeGimmickById(btn.dataset.gid);
-            this._updateGhostCountLabel();
-          });
-        });
-      }
-
-      async _handleImportedPackage(pkg) {
-        let addedChars = 0;
-        let addedMotions = 0;
-        let loadedStage = false;
-
-        let targetPmxFiles = pkg.pmxFiles;
-        if (pkg.pmxEntries && pkg.pmxEntries.length > 1) {
-          targetPmxFiles = await this._promptSelectPMXEntries(pkg.pmxEntries);
-        }
-
-        if (targetPmxFiles.length > 0 || pkg.stageFiles.length > 0) {
-          this._setLoadingOverlay(
-            true,
-            targetPmxFiles.length > 0 ? 'PMXキャラクターを読み込み中...' : '環境GLBステージを読み込み中...',
-            'テクスチャ最適化とメッシュ構築を行っています'
-          );
-          await new Promise((r) => setTimeout(r, 40));
-        }
-
-        try {
-          for (const pmxFile of targetPmxFiles) {
-            try {
-              const charId = `char_${++this.charCounter}`;
-              const cleanName = pmxFile.name.replace(/\.(pmx|pmd)$/i, '');
-              const entity = new CharacterEntity(charId, cleanName, this.scene);
-              await entity.loadPMXFromFile(pmxFile, pkg.fileMap);
-
-              const base = this.activeCharacter ? this.activeCharacter.root.position : this.initialSpawnPos;
-              const offsetIndex = this.characters.length;
-              const side = offsetIndex % 2 === 1 ? 1 : -1;
-              const dist = Math.ceil(offsetIndex / 2) * 1.25;
-              entity.root.position.set(base.x + side * dist, base.y, base.z);
-              entity.root.rotation.y = this.activeCharacter ? this.activeCharacter.root.rotation.y : this.initialSpawnYaw;
-
-              this.characters.push(entity);
-              this.activeCharIndex = this.characters.length - 1;
-              addedChars++;
-            } catch (err) {
-              console.error('PMX load error:', err);
-              this.showToast(`PMX「${pmxFile.name}」の読込に失敗しました`, 'rose');
-            }
-          }
-
-          for (const mFile of pkg.motionFiles) {
-            const lower = mFile.name.toLowerCase();
-            const type = lower.endsWith('.vpd') ? 'vpd' : 'vmd';
-            const cleanName = mFile.name.replace(/\.(vmd|vpd)$/i, '');
-            this.motions.push({
-              id: `motion_${++this.motionCounter}`,
-              name: cleanName,
-              type,
-              file: mFile
+          const btnTest = document.createElement('button');
+          btnTest.className = 'px-1.5 py-0.5 rounded bg-rose-900/80 hover:bg-rose-700 text-rose-100';
+          btnTest.textContent = '⚡';
+          btnTest.title = 'このお化けをテスト出現';
+          btnTest.onclick = () => {
+            this.ghostSystem.triggerSingleById(g.id, () => {
+              if (this.activeCharacter) this.activeCharacter.triggerScareReaction();
             });
-            addedMotions++;
-          }
+          };
 
-          if (pkg.stageFiles.length > 0) {
-            const stageFile = pkg.stageFiles[0];
-            try {
-              const info = await this.stageWorld.loadGLB(stageFile);
-              const foundGhosts = this.ghostSystem.scanGLBForTriggers(info.gltfScene, info.animations, this.stageWorld);
-              document.getElementById('stage-status').textContent = `現在：${this.stageWorld.stageName} (${info.meshCount}パーツ)`;
-              document.getElementById('drawer-stage-status').textContent = `現在：${this.stageWorld.stageName} (${info.meshCount}パーツ)`;
-              document.getElementById('hud-stage-name').textContent = this.stageWorld.stageName;
-              this._updateGhostCountLabel();
-              loadedStage = true;
-              if (foundGhosts > 0) {
-                this.showToast(`👻 GLB内の妖怪トリガー ${foundGhosts}件 を検出しました！`, 'violet', 3200);
-              }
-            } catch (err) {
-              console.error('GLB stage load error:', err);
-              this.showToast(`環境GLB「${stageFile.name}」の読込に失敗しました`, 'rose');
-            }
-          }
-        } finally {
-          this._setLoadingOverlay(false);
-        }
+          const btnDel = document.createElement('button');
+          btnDel.className = 'px-1.5 py-0.5 rounded bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-300';
+          btnDel.textContent = '✕';
+          btnDel.onclick = () => {
+            this.ghostSystem.removeGimmickById(g.id);
+            this._refreshAllUI();
+          };
 
-        if (addedChars > 0) {
-          this._syncActiveCharacterAttachment();
-          this._snapAllCharactersToGround();
-          this.showToast(`PMXキャラ ${addedChars}体 を追加しました！`, 'emerald');
-        }
-        if (addedMotions > 0) {
-          this.showToast(`VMD / ポーズ ${addedMotions}件 を追加しました！`, 'violet');
-        }
-        if (loadedStage) {
-          this._snapAllCharactersToGround();
-          this.showToast(`環境GLB「${this.stageWorld.stageName}」を読み込みました！`, 'sky');
-        }
-
-        this._refreshAllUI();
-      }
-
-      _syncActiveCharacterAttachment() {
-        this.characters.forEach((ch, idx) => {
-          const isActive = idx === this.activeCharIndex;
-          ch.setFlashlight(isActive && this.flashlightEnabled);
-          ch.setFirstPersonHidden(isActive && this.firstPersonMode);
+          row.append(label, sel, btnTest, btnDel);
+          list.appendChild(row);
         });
-      }
-
-      _cycleActiveCharacter() {
-        if (this.characters.length <= 1) {
-          this.showToast('操作できるキャラは現在1体です（PMXを追加すると乗り移れます）');
-          return;
-        }
-        this.activeCharIndex = (this.activeCharIndex + 1) % this.characters.length;
-        this._syncActiveCharacterAttachment();
-        this._refreshAllUI();
-        this.showToast(`🎮 「${this.activeCharacter.name}」に乗り移りました！`);
-      }
-
-      _switchToCharacter(index) {
-        if (index < 0 || index >= this.characters.length) return;
-        this.activeCharIndex = index;
-        this._syncActiveCharacterAttachment();
-        this._refreshAllUI();
-        this.showToast(`🎮 「${this.activeCharacter.name}」に切り替えました`);
-      }
-
-      _removeCharacter(index) {
-        if (this.characters.length <= 1) {
-          this.showToast('最後の1体は削除できません', 'rose');
-          return;
-        }
-        const [removed] = this.characters.splice(index, 1);
-        if (removed) {
-          removed._clearModel();
-          this.scene.remove(removed.root);
-        }
-        if (this.activeCharIndex >= this.characters.length) {
-          this.activeCharIndex = this.characters.length - 1;
-        }
-        this._syncActiveCharacterAttachment();
-        this._refreshAllUI();
-      }
-
-      async _triggerMotion(motionEntry) {
-        const targets =
-          this.motionTargetMode === 'all'
-            ? this.characters
-            : [this.activeCharacter].filter(Boolean);
-
-        for (const ch of targets) {
-          try {
-            await ch.applyMotion(motionEntry);
-          } catch (err) {
-            console.error('Motion apply error:', err);
-          }
-        }
-        this._refreshAllUI();
-        const scopeText = this.motionTargetMode === 'all' ? '全員' : this.activeCharacter?.name;
-        this.showToast(`🎞️ ${scopeText} に「${motionEntry.name}」を適用しました`, 'violet', 1800);
       }
 
       _toggleAutoWalk() {
@@ -4748,511 +4493,753 @@
             ? 'text-[11px] px-1.5 py-0.5 rounded bg-emerald-600 text-white font-bold'
             : 'text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-bold';
         }
-        this._refreshHotkeyBar();
-        this.showToast(
-          this.autoWalkEnabled
-            ? '🚶 自動歩行 ON（操作キャラ以外のIK付きキャラが自由に歩き回ります）'
-            : '🚶 自動歩行 OFF',
-          this.autoWalkEnabled ? 'emerald' : 'sky'
-        );
+        this._renderHotkeyQuickbar();
+        this.showToast(`他キャラIK自動歩行: ${this.autoWalkEnabled ? 'ON' : 'OFF'}`, 'emerald');
       }
 
       _toggleFlashlight() {
-        this.flashlightEnabled = !this.flashlightEnabled;
-        this._syncActiveCharacterAttachment();
+        this.flashlightOn = !this.flashlightOn;
+        if (this.activeCharacter) {
+          this.activeCharacter.setFlashlight(this.flashlightOn);
+        }
         const badge = document.getElementById('flashlight-state');
         if (badge) {
-          badge.textContent = this.flashlightEnabled ? 'ON' : 'OFF';
-          badge.className = this.flashlightEnabled
+          badge.textContent = this.flashlightOn ? 'ON' : 'OFF';
+          badge.className = this.flashlightOn
             ? 'text-[11px] px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 font-bold'
             : 'text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-bold';
         }
-        this.showToast(this.flashlightEnabled ? '🔦 手持ちライト ON' : '🔦 手持ちライト OFF');
       }
 
       _toggleFirstPerson() {
-        this.firstPersonMode = !this.firstPersonMode;
-        const active = this.activeCharacter;
-        if (this.firstPersonMode) {
-          if (active) {
-            this.camYaw = active.root.rotation.y + Math.PI;
+        this.isFirstPerson = !this.isFirstPerson;
+        if (this.activeCharacter) {
+          this.activeCharacter.setFirstPersonHidden(this.isFirstPerson);
+          if (this.isFirstPerson) {
+            this.cameraYaw = this.activeCharacter.root.rotation.y + Math.PI;
           }
-          this.camPitch = 0.0;
-        } else {
-          this.camPitch = 0.25;
         }
-        this._syncActiveCharacterAttachment();
-
-        const icon = document.getElementById('fpv-icon');
         const label = document.getElementById('fpv-label');
-        const btn = document.getElementById('btn-first-person');
-        if (icon) icon.textContent = this.firstPersonMode ? '👁️‍🗨️' : '🎥';
-        if (label) label.textContent = this.firstPersonMode ? '三人称へ' : '一人称';
-        if (btn) {
-          if (this.firstPersonMode) {
-            btn.classList.add('bg-cyan-950/80', 'border-cyan-400');
-          } else {
-            btn.classList.remove('bg-cyan-950/80', 'border-cyan-400');
-          }
-        }
-        this._refreshHotkeyBar();
-        this.showToast(
-          this.firstPersonMode
-            ? '👁️ 一人称視点モード ON（マウスドラッグで周囲を見渡せます）'
-            : '🎥 三人称視点モードに戻りました',
-          'sky',
-          2200
-        );
+        if (label) label.textContent = this.isFirstPerson ? '三人称' : '一人称';
+        this._renderHotkeyQuickbar();
       }
 
-      _toggleUI() {
+      _toggleHideUI() {
         this.uiHidden = !this.uiHidden;
-        const uiLayer = document.getElementById('ui-layer');
-        if (uiLayer) {
-          uiLayer.classList.toggle('hidden', this.uiHidden);
+        const ui = document.getElementById('ui-layer');
+        if (ui) {
+          ui.style.opacity = this.uiHidden ? '0' : '1';
+          ui.style.pointerEvents = this.uiHidden ? 'none' : 'auto';
         }
-        this.ghostSystem.setUIHidden(this.uiHidden);
         if (this.uiHidden) {
-          this.showToast('👁️ UIを非表示にしました（テンキー0 で再表示）', 'sky', 2000);
+          this.showToast('UIを非表示にしました（0キーで再表示）', 'sky');
         }
       }
 
-      _jumpActiveCharacter() {
-        const active = this.activeCharacter;
-        if (!active || !active.isGrounded) return;
-        active.velocityY = 5.6;
-        active.isGrounded = false;
+      _cycleLighting() {
+        this.lightingIndex = (this.lightingIndex + 1) % this.lightingModes.length;
+        const mode = this.lightingModes[this.lightingIndex];
+        this.stageWorld.setLightingMode(mode.id);
+        document.getElementById('lighting-icon').textContent = mode.icon;
+        document.getElementById('lighting-label').textContent = mode.label;
       }
 
-      _resetActiveCharacterPosition() {
-        const active = this.activeCharacter;
-        if (!active) return;
-        active.root.position.copy(this.initialSpawnPos);
-        active.root.rotation.y = this.initialSpawnYaw;
-        const gY = this._sampleGroundHeight(active.root.position.x, active.root.position.z, active.root.position.y + 3.0);
-        if (gY !== null) active.root.position.y = gY;
-        active.velocityY = 0;
-        active.isGrounded = true;
-        if (this.firstPersonMode) {
-          this.camYaw = active.root.rotation.y + Math.PI;
-          this.camPitch = 0.0;
+      _cycleExpression() {
+        this.expressionIndex = (this.expressionIndex + 1) % this.expressionModes.length;
+        const exp = this.expressionModes[this.expressionIndex];
+        if (this.activeCharacter) {
+          this.activeCharacter.setExpression(exp.id);
         }
-        this.showToast(
-          `🧭 初期位置 (${active.root.position.x.toFixed(1)}, ${active.root.position.y.toFixed(1)}, ${active.root.position.z.toFixed(1)}) に戻りました`
-        );
+        document.getElementById('expression-label').textContent = exp.label;
       }
 
-      _refreshAllUI() {
-        const active = this.activeCharacter;
-        document.getElementById('hud-active-char').textContent = active ? active.name : 'なし';
-        document.getElementById('badge-counts').textContent = `${this.characters.length}体 / ${this.motions.length}件`;
-        document.getElementById('tab-char-count').textContent = this.characters.length;
-        document.getElementById('tab-motion-count').textContent = this.motions.length;
-        document.getElementById('modal-char-status').textContent = `登録済: ${this.characters.length}体`;
-        document.getElementById('modal-motion-status').textContent = `登録済: ${this.motions.length}件`;
-
-        if (active) {
-          const stLabel =
-            active.motionState === 'vmd_playing'
-              ? `再生中: ${active.currentMotionName}`
-              : active.motionState === 'vmd_paused'
-                ? `一時停止: ${active.currentMotionName}`
-                : active.motionState === 'vpd_pose'
-                  ? `ポーズ: ${active.currentMotionName}`
-                  : '状態: 歩行/待機';
-          document.getElementById('hud-active-motion').textContent = stLabel;
-        }
-
-        this._renderCharacterList();
-        this._renderMotionList();
-        this._refreshHotkeyBar();
-      }
-
-      _renderCharacterList() {
-        const list = document.getElementById('character-list');
-        if (!list) return;
-        list.innerHTML = '';
-
-        this.characters.forEach((ch, idx) => {
-          const isActive = idx === this.activeCharIndex;
-          const card = document.createElement('div');
-          card.className = `rounded-xl p-2.5 border transition ${
-            isActive
-              ? 'bg-sky-950/60 border-sky-400/65'
-              : 'bg-slate-900/75 border-slate-700/60 hover:border-slate-500/70'
-          }`;
-
-          const statusText =
-            ch.motionState === 'vmd_playing'
-              ? `▶ ${ch.currentMotionName}`
-              : ch.motionState === 'vpd_pose'
-                ? `🧍 ${ch.currentMotionName}`
-                : ch.hasFootAndToeIK
-                  ? '🚶 歩行待機 (足/つま先IK対応)'
-                  : '🚶 歩行待機';
-
-          card.innerHTML = `
-            <div class="flex items-center justify-between gap-2">
-              <div class="min-w-0">
-                <div class="flex items-center gap-1.5">
-                  <span class="text-xs font-bold text-white truncate">${ch.name}</span>
-                  ${isActive ? '<span class="text-[10px] px-1.5 py-0.2 rounded bg-sky-500 text-slate-950 font-bold">操作中</span>' : ''}
-                </div>
-                <div class="text-[10px] text-slate-400 truncate mt-0.5">${statusText}</div>
-              </div>
-              <div class="flex items-center gap-1 shrink-0">
-                ${
-                  !isActive
-                    ? `<button data-idx="${idx}" class="btn-select-char px-2 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-[11px] font-semibold text-white">操作する</button>`
-                    : ''
-                }
-                ${
-                  this.characters.length > 1
-                    ? `<button data-idx="${idx}" class="btn-del-char px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-900/80 text-[11px] text-slate-300 hover:text-rose-200">✕</button>`
-                    : ''
-                }
-              </div>
-            </div>
-          `;
-          list.appendChild(card);
-        });
-
-        list.querySelectorAll('.btn-select-char').forEach((btn) => {
-          btn.addEventListener('click', () => this._switchToCharacter(parseInt(btn.dataset.idx, 10)));
-        });
-        list.querySelectorAll('.btn-del-char').forEach((btn) => {
-          btn.addEventListener('click', () => this._removeCharacter(parseInt(btn.dataset.idx, 10)));
-        });
-      }
-
-      _renderMotionList() {
-        const list = document.getElementById('motion-list');
-        if (!list) return;
-
-        if (this.motions.length === 0) {
-          list.innerHTML = `
-            <div class="text-center py-6 px-3 rounded-xl bg-slate-900/50 border border-dashed border-slate-700 text-xs text-slate-400">
-              VMDモーションまたはVPDポーズがまだありません。<br>上のボタンまたは画面へのドラッグ＆ドロップで追加できます。
-            </div>
-          `;
-          return;
-        }
-
-        list.innerHTML = '';
-        this.motions.forEach((m, idx) => {
-          const slotTag = idx < 8 ? `[キー ${idx + 1}]` : '';
-          const typeBadge =
-            m.type === 'vpd'
-              ? '<span class="text-[10px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-500/30">VPDポーズ</span>'
-              : '<span class="text-[10px] px-1.5 py-0.2 rounded bg-violet-950 text-violet-300 border border-violet-500/30">VMDモーション</span>';
-
-          const row = document.createElement('div');
-          row.className = 'rounded-xl p-2.5 bg-slate-900/80 border border-slate-700/65 flex items-center justify-between gap-2';
-          row.innerHTML = `
-            <div class="min-w-0">
-              <div class="flex items-center gap-1.5">
-                ${slotTag ? `<span class="text-[10px] font-mono text-amber-300 font-bold">${slotTag}</span>` : ''}
-                ${typeBadge}
-              </div>
-              <div class="text-xs font-semibold text-slate-100 truncate mt-0.5">${m.name}</div>
-            </div>
-            <div class="flex items-center gap-1 shrink-0">
-              <button data-mid="${m.id}" class="btn-play-motion px-2.5 py-1 rounded-lg bg-violet-600 hover:bg-violet-500 text-[11px] font-semibold text-white">▶ 適用</button>
-              <button data-midx="${idx}" class="btn-del-motion px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-900/80 text-[11px] text-slate-400 hover:text-rose-200">✕</button>
-            </div>
-          `;
-          list.appendChild(row);
-        });
-
-        list.querySelectorAll('.btn-play-motion').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            const found = this.motions.find((item) => item.id === btn.dataset.mid);
-            if (found) this._triggerMotion(found);
-          });
-        });
-        list.querySelectorAll('.btn-del-motion').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            const idx = parseInt(btn.dataset.midx, 10);
-            this.motions.splice(idx, 1);
-            this._refreshAllUI();
-          });
-        });
-      }
-
-      _refreshHotkeyBar() {
-        const bar = document.getElementById('hotkey-quickbar');
-        if (!bar) return;
-        bar.innerHTML = '';
-
-        for (let i = 0; i < 8; i++) {
-          const m = this.motions[i];
-          const btn = document.createElement('button');
-          btn.className = m
-            ? 'px-2.5 py-1 rounded-xl bg-violet-950/85 hover:bg-violet-800/85 text-violet-100 border border-violet-400/40 text-[11px] font-medium whitespace-nowrap transition'
-            : 'px-2 py-1 rounded-xl bg-slate-900/60 text-slate-500 border border-slate-800 text-[11px] whitespace-nowrap cursor-default';
-          btn.textContent = m ? `${i + 1} ${m.name.slice(0, 7)}` : `${i + 1} 空`;
-          if (m) {
-            btn.title = `キー ${i + 1}: ${m.name}`;
-            btn.addEventListener('click', () => this._triggerMotion(m));
-          }
-          bar.appendChild(btn);
-        }
-
-        const btn9 = document.createElement('button');
-        btn9.className = this.autoWalkEnabled
-          ? 'px-2.5 py-1 rounded-xl bg-emerald-600 text-white font-bold text-[11px] whitespace-nowrap transition'
-          : 'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/35 text-[11px] font-medium whitespace-nowrap transition';
-        btn9.textContent = '9 自動歩行';
-        btn9.addEventListener('click', () => this._toggleAutoWalk());
-        bar.appendChild(btn9);
-
-        const btnFpv = document.createElement('button');
-        btnFpv.className = this.firstPersonMode
-          ? 'px-2.5 py-1 rounded-xl bg-cyan-600 text-white font-bold text-[11px] whitespace-nowrap transition'
-          : 'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-200 border border-cyan-500/35 text-[11px] font-medium whitespace-nowrap transition';
-        btnFpv.textContent = this.firstPersonMode ? 'V 三人称視点' : 'V 一人称視点';
-        btnFpv.addEventListener('click', () => this._toggleFirstPerson());
-        bar.appendChild(btnFpv);
-
-        const btn0 = document.createElement('button');
-        btn0.className = 'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-200 border border-amber-500/35 text-[11px] font-medium whitespace-nowrap transition';
-        btn0.textContent = '0 UI隠す';
-        btn0.addEventListener('click', () => this._toggleUI());
-        bar.appendChild(btn0);
-      }
-      // PMXMultiStudioApp._updateActiveCharacterMovement
-      _updateActiveCharacterMovement(dt) {
+      _updateCharacterMovement(dt) {
         const active = this.activeCharacter;
         if (!active) return;
 
-        let forwardInput = 0;
-        let rightInput = 0;
-        if (this.keys['KeyW'] || this.keys['ArrowUp'] || this.touchMove.up) forwardInput += 1;
-        if (this.keys['KeyS'] || this.keys['ArrowDown'] || this.touchMove.down) forwardInput -= 1;
-        if (this.keys['KeyD'] || this.keys['ArrowRight'] || this.touchMove.right) rightInput += 1;
-        if (this.keys['KeyA'] || this.keys['ArrowLeft'] || this.touchMove.left) rightInput -= 1;
+        // Horizontal movement vector in camera-relative local axes:
+        // moveX: -1 = Left (A), +1 = Right (D)
+        // moveZ: -1 = Forward (W), +1 = Backward (S)
+        let moveX = 0;
+        let moveZ = 0;
+        if (this.keys['KeyW'] || this.keys['ArrowUp'] || this.touchDirs.up) moveZ -= 1;
+        if (this.keys['KeyS'] || this.keys['ArrowDown'] || this.touchDirs.down) moveZ += 1;
+        if (this.keys['KeyA'] || this.keys['ArrowLeft'] || this.touchDirs.left) moveX -= 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight'] || this.touchDirs.right) moveX += 1;
 
-        const isMoving = forwardInput !== 0 || rightInput !== 0;
+        const isMovingInput = moveX !== 0 || moveZ !== 0;
         const isSprinting = Boolean(this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.touchSprint);
 
-        if (isMoving && active.motionState !== 'walk') {
-          const autoStop = document.getElementById('chk-auto-stop-on-move')?.checked;
-          if (autoStop) {
-            active.stopMotionToWalk();
-            this._refreshAllUI();
-          }
+        if (isMovingInput && this.autoStopOnMove && active.motionState !== 'walk') {
+          active.stopMotionToWalk();
+          this._refreshAllUI();
         }
 
         let speedRatio = 0;
-        if (isMoving) {
-          const moveAngle = Math.atan2(rightInput, forwardInput);
-          const worldDirAngle = this.camYaw + Math.PI - moveAngle;
+        if (isMovingInput) {
+          const len = Math.hypot(moveX, moveZ);
+          moveX /= len;
+          moveZ /= len;
 
-          if (!this.firstPersonMode) {
-            let diff = worldDirAngle - active.root.rotation.y;
+          // Rotate local (moveX, moveZ) by cameraYaw around Y axis so A=Left and D=Right
+          const cosY = Math.cos(this.cameraYaw);
+          const sinY = Math.sin(this.cameraYaw);
+          const worldX = moveX * cosY + moveZ * sinY;
+          const worldZ = -moveX * sinY + moveZ * cosY;
+
+          const baseSpeed = isSprinting ? 4.8 : 2.55;
+          const stepDist = baseSpeed * dt;
+          const pos = active.root.position;
+
+          // Slide along X and Z independently if blocked by a wall
+          if (Math.abs(worldX) > 0.0001) {
+            const dirX = new THREE.Vector3(Math.sign(worldX), 0, 0);
+            const dx = Math.abs(worldX) * stepDist;
+            if (!this.stageWorld.checkWallObstacle(pos, dirX, dx)) {
+              pos.x += worldX * stepDist;
+            }
+          }
+          if (Math.abs(worldZ) > 0.0001) {
+            const dirZ = new THREE.Vector3(0, 0, Math.sign(worldZ));
+            const dz = Math.abs(worldZ) * stepDist;
+            if (!this.stageWorld.checkWallObstacle(pos, dirZ, dz)) {
+              pos.z += worldZ * stepDist;
+            }
+          }
+
+          if (!this.isFirstPerson) {
+            const targetYaw = Math.atan2(worldX, worldZ);
+            let diff = targetYaw - active.root.rotation.y;
             while (diff > Math.PI) diff -= Math.PI * 2;
             while (diff < -Math.PI) diff += Math.PI * 2;
             active.root.rotation.y += diff * Math.min(1, dt * 14);
+          } else {
+            active.root.rotation.y = this.cameraYaw + Math.PI;
           }
 
-          const moveSpeed = isSprinting ? 5.2 : 2.75;
           speedRatio = isSprinting ? 1.0 : 0.55;
-          const stepDist = moveSpeed * dt;
-          const dirVec = new THREE.Vector3(Math.sin(worldDirAngle), 0, Math.cos(worldDirAngle));
-
-          if (!this.stageWorld.checkWallObstacle(active.root.position, dirVec, stepDist)) {
-            active.root.position.addScaledVector(dirVec, stepDist);
-          }
-        }
-
-        if (this.firstPersonMode) {
-          active.root.rotation.y = this.camYaw + Math.PI;
+        } else if (this.isFirstPerson) {
+          active.root.rotation.y = this.cameraYaw + Math.PI;
         }
 
         // Gravity & Ground Collision
-        active.velocityY -= 15.5 * dt;
-        active.root.position.y += active.velocityY * dt;
+        const pos = active.root.position;
+        const groundY = this.stageWorld.sampleGroundHeight(pos.x, pos.z, pos.y);
+        const floorTarget = groundY !== null ? groundY : 0;
 
-        const groundY = this._sampleGroundHeight(active.root.position.x, active.root.position.z, active.root.position.y);
-        if (groundY !== null && active.root.position.y <= groundY + 0.02 && active.velocityY <= 0) {
-          active.root.position.y = groundY;
+        if (!active.isGrounded || pos.y > floorTarget + 0.04) {
+          active.velocityY -= 16.5 * dt;
+          pos.y += active.velocityY * dt;
+          if (pos.y <= floorTarget) {
+            pos.y = floorTarget;
+            active.velocityY = 0;
+            active.isGrounded = true;
+          } else {
+            active.isGrounded = false;
+          }
+        } else {
+          pos.y += (floorTarget - pos.y) * Math.min(1, dt * 18);
           active.velocityY = 0;
           active.isGrounded = true;
-        } else if (groundY === null && active.root.position.y < -8) {
-          this._resetActiveCharacterPosition();
         }
 
-        document.getElementById('hud-ground-y').textContent = `${active.root.position.y.toFixed(2)}m`;
         active.update(dt, speedRatio, this.lipSync.vowels);
-      }
 
-      _updateAutonomousCharacters(dt) {
-        this.characters.forEach((ch, idx) => {
+        // Update Non-Active Characters (IK Autonomous Walk when enabled)
+        this.characters.forEach((char, idx) => {
           if (idx === this.activeCharIndex) return;
+          let aiRatio = 0;
 
-          let speedRatio = 0;
-          if (this.autoWalkEnabled && ch.hasFootAndToeIK && ch.motionState === 'walk') {
-            if (ch.aiWaitTimer > 0) {
-              ch.aiWaitTimer -= dt;
+          if (this.autoWalkEnabled && char.hasFootAndToeIK && char.motionState === 'walk') {
+            if (char.aiWaitTimer > 0) {
+              char.aiWaitTimer -= dt;
             } else {
-              if (!ch.aiTarget) {
-                const base = this.activeCharacter ? this.activeCharacter.root.position : new THREE.Vector3();
+              if (!char.aiTarget || char.root.position.distanceTo(char.aiTarget) < 0.45) {
                 const angle = Math.random() * Math.PI * 2;
-                const radius = 1.8 + Math.random() * 6.5;
-                ch.aiTarget = new THREE.Vector3(
-                  base.x + Math.cos(angle) * radius,
-                  base.y,
-                  base.z + Math.sin(angle) * radius
-                );
+                const dist = 2.5 + Math.random() * 5.5;
+                const tx = active.root.position.x + Math.cos(angle) * dist;
+                const tz = active.root.position.z + Math.sin(angle) * dist;
+                char.aiTarget = this.stageWorld.findBestSafeFloorNear(tx, tz, char.root.position.y, 3.0);
               }
 
               const toTarget = new THREE.Vector3(
-                ch.aiTarget.x - ch.root.position.x,
+                char.aiTarget.x - char.root.position.x,
                 0,
-                ch.aiTarget.z - ch.root.position.z
+                char.aiTarget.z - char.root.position.z
               );
-              const dist = toTarget.length();
-              if (dist < 0.45) {
-                ch.aiTarget = null;
-                ch.aiWaitTimer = 0.8 + Math.random() * 2.2;
-              } else {
+              const d = toTarget.length();
+              if (d > 0.1) {
                 toTarget.normalize();
-                const targetYaw = Math.atan2(toTarget.x, toTarget.z);
-                let diff = targetYaw - ch.root.rotation.y;
-                while (diff > Math.PI) diff -= Math.PI * 2;
-                while (diff < -Math.PI) diff += Math.PI * 2;
-                ch.root.rotation.y += diff * Math.min(1, dt * 8);
-
-                const step = ch.aiSpeed * dt;
-                if (!this.stageWorld.checkWallObstacle(ch.root.position, toTarget, step)) {
-                  ch.root.position.addScaledVector(toTarget, step);
-                  speedRatio = 0.5;
+                const step = char.aiSpeed * dt;
+                if (!this.stageWorld.checkWallObstacle(char.root.position, toTarget, step)) {
+                  char.root.position.x += toTarget.x * step;
+                  char.root.position.z += toTarget.z * step;
+                  const targetYaw = Math.atan2(toTarget.x, toTarget.z);
+                  let diff = targetYaw - char.root.rotation.y;
+                  while (diff > Math.PI) diff -= Math.PI * 2;
+                  while (diff < -Math.PI) diff += Math.PI * 2;
+                  char.root.rotation.y += diff * Math.min(1, dt * 8);
+                  aiRatio = 0.52;
                 } else {
-                  ch.aiTarget = null;
-                  ch.aiWaitTimer = 0.5;
+                  char.aiTarget = null;
+                  char.aiWaitTimer = 0.8 + Math.random() * 1.2;
                 }
               }
             }
           }
 
-          const groundY = this._sampleGroundHeight(ch.root.position.x, ch.root.position.z, ch.root.position.y + 1.0);
-          if (groundY !== null) {
-            ch.root.position.y = groundY;
+          const gY = this.stageWorld.sampleGroundHeight(char.root.position.x, char.root.position.z, char.root.position.y);
+          if (gY !== null) {
+            char.root.position.y += (gY - char.root.position.y) * Math.min(1, dt * 15);
           }
-          ch.update(dt, speedRatio, null);
+          char.update(dt, aiRatio, null);
         });
       }
 
-      _updateCamera(dt = 0.016) {
+      _updateCamera() {
         const active = this.activeCharacter;
         if (!active) return;
+        const pos = active.root.position;
 
-        if (this.cameraShakeTimer > 0) {
-          this.cameraShakeTimer = Math.max(0, this.cameraShakeTimer - dt);
-        }
-
-        if (this.firstPersonMode) {
-          const isMoving = Boolean(
-            this.keys['KeyW'] ||
-            this.keys['KeyS'] ||
-            this.keys['KeyA'] ||
-            this.keys['KeyD'] ||
-            this.keys['ArrowUp'] ||
-            this.keys['ArrowDown'] ||
-            this.keys['ArrowLeft'] ||
-            this.keys['ArrowRight'] ||
-            this.touchMove.up ||
-            this.touchMove.down ||
-            this.touchMove.left ||
-            this.touchMove.right
-          );
-          const isSprinting = Boolean(this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.touchSprint);
-          if (isMoving) {
-            this.headBobTimer += dt * (isSprinting ? 13.5 : 9.2);
-          }
-
-          const bobY = isMoving ? Math.sin(this.headBobTimer) * 0.032 : Math.sin(performance.now() * 0.0022) * 0.008;
-          const bobX = isMoving ? Math.cos(this.headBobTimer * 0.5) * 0.018 : 0;
-
-          const shakeIntensity = this.cameraShakeTimer > 0 ? (this.cameraShakeTimer / 0.45) * 0.055 : 0;
-          const shakeX = shakeIntensity > 0 ? (Math.random() - 0.5) * shakeIntensity : 0;
-          const shakeY = shakeIntensity > 0 ? (Math.random() - 0.5) * shakeIntensity : 0;
-
-          const lookDir = new THREE.Vector3(
-            -Math.sin(this.camYaw) * Math.cos(this.camPitch),
-            -Math.sin(this.camPitch),
-            -Math.cos(this.camYaw) * Math.cos(this.camPitch)
-          ).normalize();
-
-          const rightDir = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
-
-          const eyePos = active.root.position.clone().add(new THREE.Vector3(0, 1.50 + bobY + shakeY, 0));
-          eyePos.addScaledVector(rightDir, bobX + shakeX);
-
+        if (this.isFirstPerson) {
+          const eyePos = new THREE.Vector3(pos.x, pos.y + 1.46, pos.z);
           this.camera.position.copy(eyePos);
-          this.camera.lookAt(eyePos.clone().addScaledVector(lookDir, 6.0));
+          const lookDir = new THREE.Vector3(
+            -Math.sin(this.cameraYaw) * Math.cos(this.cameraPitch),
+            -Math.sin(this.cameraPitch),
+            -Math.cos(this.cameraYaw) * Math.cos(this.cameraPitch)
+          );
+          this.camera.lookAt(eyePos.clone().add(lookDir));
 
-          if (this.flashlightEnabled && active.flashlightGroup) {
-            const handPos = eyePos.clone()
-              .addScaledVector(rightDir, 0.22)
-              .add(new THREE.Vector3(0, -0.22, 0))
-              .addScaledVector(lookDir, 0.35);
-            active.flashlightGroup.position.copy(handPos);
-            active.flashlightGroup.lookAt(eyePos.clone().addScaledVector(lookDir, 8.0));
+          if (this.flashlightOn && active.flashlightGroup) {
+            const rightX = Math.cos(this.cameraYaw);
+            const rightZ = -Math.sin(this.cameraYaw);
+            active.flashlightGroup.position.set(
+              eyePos.x + rightX * 0.22 + lookDir.x * 0.35,
+              eyePos.y - 0.18 + lookDir.y * 0.35,
+              eyePos.z + rightZ * 0.22 + lookDir.z * 0.35
+            );
+            active.flashlightGroup.lookAt(eyePos.clone().addScaledVector(lookDir, 6.0));
           }
         } else {
-          const target = active.root.position.clone().add(new THREE.Vector3(0, 1.25, 0));
-          const horizDist = Math.cos(this.camPitch) * this.camDist;
-          const vertDist = Math.sin(this.camPitch) * this.camDist;
+          const target = new THREE.Vector3(pos.x, pos.y + 1.22, pos.z);
+          const offsetX = Math.sin(this.cameraYaw) * Math.cos(this.cameraPitch) * this.cameraDistance;
+          const offsetY = Math.sin(this.cameraPitch) * this.cameraDistance;
+          const offsetZ = Math.cos(this.cameraYaw) * Math.cos(this.cameraPitch) * this.cameraDistance;
+          const desiredCam = new THREE.Vector3(target.x + offsetX, target.y + offsetY, target.z + offsetZ);
 
-          const desiredCamPos = new THREE.Vector3(
-            target.x + Math.sin(this.camYaw) * horizDist,
-            target.y + vertDist,
-            target.z + Math.cos(this.camYaw) * horizDist
-          );
+          // Prevent camera from clipping behind stage walls
+          if (this.stageWorld.colliders.length > 0) {
+            const rayDir = desiredCam.clone().sub(target);
+            const maxDist = rayDir.length();
+            if (maxDist > 0.1) {
+              rayDir.normalize();
+              this.raycaster.set(target, rayDir);
+              this.raycaster.far = maxDist;
+              const hits = this.raycaster.intersectObjects(this.stageWorld.colliders, false);
+              if (hits.length > 0) {
+                desiredCam.copy(target).addScaledVector(rayDir, Math.max(0.65, hits[0].distance - 0.25));
+              }
+            }
+          }
 
-          this.camera.position.lerp(desiredCamPos, 0.22);
+          this.camera.position.copy(desiredCam);
           this.camera.lookAt(target);
         }
       }
 
+      _updateLipSyncUI() {
+        const levelBar = document.getElementById('lipsync-level-bar');
+        const vowelDisp = document.getElementById('lipsync-vowel-display');
+        if (levelBar) levelBar.style.width = `${Math.round(this.lipSync.level * 100)}%`;
+        if (vowelDisp) {
+          vowelDisp.textContent =
+            this.lipSync.level > 0.04 ? `発声中 (${this.lipSync.dominantVowel})` : '無音 (ー)';
+        }
+        ['a', 'i', 'u', 'e', 'o'].forEach((v) => {
+          const el = document.getElementById(`v-${v}`);
+          if (el) el.textContent = `${Math.round((this.lipSync.vowels[v] || 0) * 100)}%`;
+        });
+      }
+
       _animate() {
-        requestAnimationFrame(() => this._animate());
+        requestAnimationFrame(this._animate);
         if (this.isLoadingAsset) return;
 
         const dt = Math.min(0.05, this.clock.getDelta());
 
         this.lipSync.update(dt);
-        this._updateActiveCharacterMovement(dt);
-        this._updateAutonomousCharacters(dt);
+        this._updateLipSyncUI();
+        this._updateCharacterMovement(dt);
+        this._updateCamera();
 
         const active = this.activeCharacter;
         if (active) {
-          this.ghostSystem.update(dt, active.root.position, (g) => this._onCharacterScaredByGhost(g));
+          document.getElementById('hud-ground-y').textContent = `${active.root.position.y.toFixed(2)}m`;
+          this.ghostSystem.update(dt, active.root.position, (g) => {
+            active.triggerScareReaction();
+            this.showToast(`👻 「${g.name}」が出現！`, 'purple');
+          });
         }
 
-        // Update Lip-Sync HUD meter
-        const levelBar = document.getElementById('lipsync-level-bar');
-        const vowelDisplay = document.getElementById('lipsync-vowel-display');
-        if (levelBar) levelBar.style.width = `${Math.round(this.lipSync.level * 100)}%`;
-        if (vowelDisplay) {
-          vowelDisplay.textContent =
-            this.lipSync.level > 0.04
-              ? `母音「${this.lipSync.dominantVowel}」 (${Math.round(this.lipSync.level * 100)}%)`
-              : '無音 (ー)';
-        }
-        ['a', 'i', 'u', 'e', 'o'].forEach((v) => {
-          const el = document.getElementById(`v-${v}`);
-          if (el) el.textContent = `${Math.round(this.lipSync.vowels[v] * 100)}%`;
+        this.renderer.render(this.scene, this.camera);
+      }
+
+      _bindEvents() {
+        // Resize
+        window.addEventListener('resize', () => {
+          this.camera.aspect = window.innerWidth / window.innerHeight;
+          this.camera.updateProjectionMatrix();
+          this.renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        this._updateCamera(dt);
-        this.renderer.render(this.scene, this.camera);
+        // Keyboard
+        window.addEventListener('keydown', (e) => {
+          if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+          this.keys[e.code] = true;
+
+          if (e.code === 'Space') {
+            e.preventDefault();
+            const active = this.activeCharacter;
+            if (active && active.isGrounded) {
+              active.velocityY = 6.2;
+              active.isGrounded = false;
+            }
+          } else if (e.code === 'KeyF') {
+            this._toggleFlashlight();
+          } else if (e.code === 'KeyV') {
+            this._toggleFirstPerson();
+          } else if (e.code === 'KeyR') {
+            this._resetActiveCharacterPosition();
+            this.showToast('初期位置へ戻りました', 'sky');
+          } else if (e.code === 'Tab') {
+            e.preventDefault();
+            if (this.characters.length > 1) {
+              this.switchActiveCharacter((this.activeCharIndex + 1) % this.characters.length);
+            }
+          } else if (e.code === 'Numpad0' || e.code === 'Digit0') {
+            this._toggleHideUI();
+          } else if (e.code === 'Numpad9' || e.code === 'Digit9') {
+            this._toggleAutoWalk();
+          } else if (/^(Numpad|Digit)[1-8]$/.test(e.code)) {
+            const slot = parseInt(e.code.slice(-1), 10) - 1;
+            if (this.motions[slot]) {
+              this.playMotionById(this.motions[slot].id, 'active');
+            }
+          }
+        });
+
+        window.addEventListener('keyup', (e) => {
+          this.keys[e.code] = false;
+        });
+
+        // Pointer Orbit & Floor Click Placement
+        const dom = this.renderer.domElement;
+        dom.addEventListener('pointerdown', (e) => {
+          this.isDraggingOrbit = true;
+          this.pointerDownPos = { x: e.clientX, y: e.clientY };
+          this.lastPointerPos = { x: e.clientX, y: e.clientY };
+        });
+
+        window.addEventListener('pointermove', (e) => {
+          if (this.isDraggingOrbit) {
+            const dx = e.clientX - this.lastPointerPos.x;
+            const dy = e.clientY - this.lastPointerPos.y;
+            this.lastPointerPos = { x: e.clientX, y: e.clientY };
+
+            this.cameraYaw -= dx * 0.0062;
+            this.cameraPitch = Math.max(-0.55, Math.min(1.25, this.cameraPitch + dy * 0.0052));
+          } else if ((this.clickPlaceMode || this.spawnClickMode) && e.target === dom) {
+            const hit = this._raycastStageFloor(e.clientX, e.clientY);
+            if (hit) {
+              this.ghostSystem.setReticlePosition(hit, true);
+            }
+          }
+        });
+
+        window.addEventListener('pointerup', (e) => {
+          const movedDist = Math.hypot(e.clientX - this.pointerDownPos.x, e.clientY - this.pointerDownPos.y);
+          this.isDraggingOrbit = false;
+
+          if (movedDist < 6 && e.target === dom && (this.clickPlaceMode || this.spawnClickMode)) {
+            const hit = this._raycastStageFloor(e.clientX, e.clientY);
+            if (hit) {
+              if (this.clickPlaceMode) {
+                const refY = this.activeCharacter ? this.activeCharacter.root.position.y : hit.y;
+                const g = this.ghostSystem.spawnSingleGhost(
+                  this.selectedGhostVariant,
+                  hit,
+                  this.stageWorld,
+                  this.selectedGhostMotion,
+                  refY
+                );
+                this.showToast(`「${g.name}」の出現ポイントを設置しました`, 'purple');
+                this._refreshAllUI();
+              } else if (this.spawnClickMode) {
+                const yaw = this.activeCharacter ? this.activeCharacter.root.rotation.y : this.initialSpawnYaw;
+                this.setInitialSpawnPoint(hit, yaw);
+                this._toggleSpawnClickMode(false);
+                this.showToast(`初期位置を (${hit.x.toFixed(1)}, ${hit.y.toFixed(1)}, ${hit.z.toFixed(1)}) に設定しました`, 'sky');
+              }
+            }
+          }
+        });
+
+        dom.addEventListener(
+          'wheel',
+          (e) => {
+            e.preventDefault();
+            this.cameraDistance = Math.max(1.4, Math.min(16.0, this.cameraDistance + e.deltaY * 0.003));
+          },
+          { passive: false }
+        );
+
+        // Touch D-Pad & Jump/Sprint
+        document.querySelectorAll('#touch-dpad [data-dir]').forEach((btn) => {
+          const dir = btn.dataset.dir;
+          const setDir = (val) => { this.touchDirs[dir] = val; };
+          btn.addEventListener('pointerdown', (e) => { e.preventDefault(); setDir(true); });
+          btn.addEventListener('pointerup', () => setDir(false));
+          btn.addEventListener('pointerleave', () => setDir(false));
+          btn.addEventListener('pointercancel', () => setDir(false));
+        });
+
+        const btnTouchJump = document.getElementById('btn-touch-jump');
+        if (btnTouchJump) {
+          btnTouchJump.addEventListener('click', () => {
+            const active = this.activeCharacter;
+            if (active && active.isGrounded) {
+              active.velocityY = 6.2;
+              active.isGrounded = false;
+            }
+          });
+        }
+
+        const btnTouchSprint = document.getElementById('btn-touch-sprint');
+        if (btnTouchSprint) {
+          btnTouchSprint.addEventListener('click', () => {
+            this.touchSprint = !this.touchSprint;
+            btnTouchSprint.textContent = `🏃 走り: ${this.touchSprint ? 'ON' : 'OFF'}`;
+          });
+        }
+
+        // Top HUD & Drawer Controls
+        document.getElementById('btn-quick-next-char').onclick = () => {
+          if (this.characters.length > 1) {
+            this.switchActiveCharacter((this.activeCharIndex + 1) % this.characters.length);
+          } else {
+            this.showToast('他のキャラクターを追加すると乗り移りできます', 'sky');
+          }
+        };
+
+        const drawer = document.getElementById('manager-drawer');
+        document.getElementById('btn-toggle-drawer').onclick = () => drawer.classList.toggle('hidden');
+        document.getElementById('btn-close-drawer').onclick = () => drawer.classList.add('hidden');
+
+        document.querySelectorAll('.drawer-tab').forEach((tabBtn) => {
+          tabBtn.onclick = () => {
+            const tab = tabBtn.dataset.tab;
+            document.querySelectorAll('.drawer-tab').forEach((b) => {
+              b.className =
+                b === tabBtn
+                  ? 'drawer-tab flex-1 py-2.5 px-2 text-sky-300 border-b-2 border-sky-400 bg-sky-950/30 transition'
+                  : 'drawer-tab flex-1 py-2.5 px-2 text-slate-400 hover:text-slate-200 border-b-2 border-transparent transition';
+            });
+            document.querySelectorAll('.drawer-panel').forEach((p) => p.classList.add('hidden'));
+            const panel = document.getElementById(`panel-${tab}`);
+            if (panel) panel.classList.remove('hidden');
+          };
+        });
+
+        document.getElementById('btn-auto-walk').onclick = () => this._toggleAutoWalk();
+        document.getElementById('btn-flashlight').onclick = () => this._toggleFlashlight();
+        document.getElementById('btn-expression').onclick = () => this._cycleExpression();
+        document.getElementById('btn-lighting').onclick = () => this._cycleLighting();
+        document.getElementById('btn-first-person').onclick = () => this._toggleFirstPerson();
+        document.getElementById('btn-hide-ui').onclick = () => this._toggleHideUI();
+
+        // Setup Modal
+        const setupModal = document.getElementById('setup-modal');
+        document.getElementById('btn-open-setup').onclick = () => {
+          setupModal.classList.remove('hidden');
+          setupModal.classList.add('flex');
+        };
+        const closeSetup = () => {
+          setupModal.classList.add('hidden');
+          setupModal.classList.remove('flex');
+        };
+        document.getElementById('btn-close-setup').onclick = closeSetup;
+        document.getElementById('btn-start-studio').onclick = closeSetup;
+
+        // Character & Motion & Stage File Inputs
+        const bindInput = (id) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.onchange = (e) => {
+            if (e.target.files && e.target.files.length > 0) {
+              this.handleIncomingFiles(e.target.files);
+              e.target.value = '';
+            }
+          };
+        };
+        bindInput('input-char-folder');
+        bindInput('input-char-file');
+        bindInput('input-motion-file');
+        bindInput('input-stage-glb');
+        bindInput('quick-char-folder');
+        bindInput('quick-char-file');
+        bindInput('quick-motion-file');
+        bindInput('quick-stage-file');
+
+        // Batch Character & Motion Buttons
+        document.getElementById('btn-lineup-chars').onclick = () => this.lineupCharacters();
+        document.getElementById('btn-all-chars-walk').onclick = () => {
+          this.characters.forEach((c) => c.stopMotionToWalk());
+          this._refreshAllUI();
+        };
+
+        const btnTargetActive = document.getElementById('target-mode-active');
+        const btnTargetAll = document.getElementById('target-mode-all');
+        btnTargetActive.onclick = () => {
+          this.motionTargetMode = 'active';
+          btnTargetActive.className = 'px-2 py-0.5 rounded-md bg-sky-600 text-white font-semibold transition';
+          btnTargetAll.className = 'px-2 py-0.5 rounded-md text-slate-400 hover:text-white transition';
+        };
+        btnTargetAll.onclick = () => {
+          this.motionTargetMode = 'all';
+          btnTargetAll.className = 'px-2 py-0.5 rounded-md bg-sky-600 text-white font-semibold transition';
+          btnTargetActive.className = 'px-2 py-0.5 rounded-md text-slate-400 hover:text-white transition';
+        };
+
+        document.getElementById('btn-batch-play').onclick = () => {
+          const targets = this.motionTargetMode === 'all' ? this.characters : [this.activeCharacter].filter(Boolean);
+          targets.forEach((c) => c.resumeMotion());
+          this._refreshAllUI();
+        };
+        document.getElementById('btn-batch-pause').onclick = () => {
+          const targets = this.motionTargetMode === 'all' ? this.characters : [this.activeCharacter].filter(Boolean);
+          targets.forEach((c) => c.pauseMotion());
+          this._refreshAllUI();
+        };
+        document.getElementById('btn-batch-stop').onclick = () => {
+          const targets = this.motionTargetMode === 'all' ? this.characters : [this.activeCharacter].filter(Boolean);
+          targets.forEach((c) => c.stopMotionToWalk());
+          this._refreshAllUI();
+        };
+        document.getElementById('chk-auto-stop-on-move').onchange = (e) => {
+          this.autoStopOnMove = e.target.checked;
+        };
+
+        // Stage & Haunted House Controls
+        const resetToGarden = () => {
+          this.ghostSystem.clearAll();
+          this.stageWorld.buildDefaultGarden();
+          this._snapAllCharactersToGround();
+          this._refreshAllUI();
+          this.showToast('標準テラス庭園に戻しました', 'sky');
+        };
+        document.getElementById('btn-reset-stage').onclick = resetToGarden;
+        document.getElementById('btn-drawer-reset-stage').onclick = resetToGarden;
+
+        const buildHaunted = () => {
+          this.ghostSystem.clearAll();
+          this.stageWorld.buildHauntedHouseStage();
+          this.setInitialSpawnPoint(new THREE.Vector3(0, 0, 7.2), Math.PI);
+          this._resetActiveCharacterPosition();
+          const refY = this.activeCharacter ? this.activeCharacter.root.position.y : 0;
+          const count = this.ghostSystem.spawnJapaneseGhosts(7, this.stageWorld, refY);
+          this._refreshAllUI();
+          this.showToast(`和風お化け屋敷を生成し、妖怪 ${count}体を配置しました！`, 'purple');
+        };
+        document.getElementById('btn-build-haunted-stage').onclick = buildHaunted;
+        document.getElementById('btn-build-haunted-stage-main').onclick = buildHaunted;
+
+        const syncStageScale = (val) => {
+          const s = parseFloat(val) || 1.0;
+          this.stageWorld.applyScale(s);
+          this.ghostSystem.syncWithStageScale(s);
+          document.getElementById('stage-scale-slider').value = s;
+          document.getElementById('drawer-stage-scale').value = s;
+          document.getElementById('stage-scale-val').textContent = `${s.toFixed(1)}x`;
+          document.getElementById('drawer-scale-val').textContent = `${s.toFixed(1)}x`;
+          this._snapAllCharactersToGround();
+        };
+        document.getElementById('stage-scale-slider').oninput = (e) => syncStageScale(e.target.value);
+        document.getElementById('drawer-stage-scale').oninput = (e) => syncStageScale(e.target.value);
+
+        // Initial Spawn Point Controls
+        document.getElementById('btn-set-spawn-here').onclick = () => {
+          const active = this.activeCharacter;
+          if (!active) return;
+          this.setInitialSpawnPoint(active.root.position.clone(), active.root.rotation.y);
+          this.showToast('現在地を初期位置に登録しました', 'sky');
+        };
+        document.getElementById('btn-toggle-spawn-click').onclick = () => this._toggleSpawnClickMode();
+        document.getElementById('btn-apply-spawn-inputs').onclick = () => {
+          const x = parseFloat(document.getElementById('input-spawn-x').value) || 0;
+          const y = parseFloat(document.getElementById('input-spawn-y').value) || 0;
+          const z = parseFloat(document.getElementById('input-spawn-z').value) || 0;
+          const deg = parseFloat(document.getElementById('input-spawn-yaw').value) || 0;
+          this.setInitialSpawnPoint(new THREE.Vector3(x, y, z), (deg * Math.PI) / 180);
+          this._resetActiveCharacterPosition();
+          this.showToast('入力した初期位置へ移動しました', 'sky');
+        };
+        document.getElementById('btn-drawer-reset-pos').onclick = () => {
+          this._resetActiveCharacterPosition();
+          this.showToast('初期位置へ戻りました', 'sky');
+        };
+
+        // Ghost Gimmick Controls
+        document.querySelectorAll('.ghost-variant-opt').forEach((btn) => {
+          btn.onclick = () => {
+            this.selectedGhostVariant = btn.dataset.variant;
+            document.querySelectorAll('.ghost-variant-opt').forEach((b) => {
+              b.className =
+                b === btn
+                  ? 'ghost-variant-opt py-1.5 px-1 rounded-lg bg-purple-900/90 text-white border-2 border-purple-400 font-bold transition truncate'
+                  : 'ghost-variant-opt py-1.5 px-1 rounded-lg bg-slate-800/80 hover:bg-purple-950/70 text-slate-200 border border-slate-600/50 transition truncate';
+            });
+          };
+        });
+
+        document.getElementById('select-ghost-motion').onchange = (e) => {
+          this.selectedGhostMotion = e.target.value;
+        };
+
+        document.getElementById('btn-toggle-click-place').onclick = () => this._toggleClickPlaceMode();
+        document.getElementById('btn-spawn-in-front').onclick = () => this._spawnGhostInFront();
+
+        document.getElementById('btn-clear-spawned-ghosts').onclick = () => {
+          this.ghostSystem.clearSpawnedGhosts();
+          this._refreshAllUI();
+          this.showToast('設置したお化けを解除しました', 'sky');
+        };
+
+        document.getElementById('btn-spawn-ghosts-7').onclick = () => {
+          const refY = this.activeCharacter ? this.activeCharacter.root.position.y : 0;
+          const n = this.ghostSystem.spawnJapaneseGhosts(7, this.stageWorld, refY);
+          this._refreshAllUI();
+          this.showToast(`妖怪 ${n}体を自動配置しました`, 'purple');
+        };
+
+        document.getElementById('btn-spawn-ghosts-12').onclick = () => {
+          const refY = this.activeCharacter ? this.activeCharacter.root.position.y : 0;
+          const n = this.ghostSystem.spawnJapaneseGhosts(12, this.stageWorld, refY);
+          this._refreshAllUI();
+          this.showToast(`妖怪 ${n}体を自動配置しました`, 'purple');
+        };
+
+        document.getElementById('ghost-trigger-radius').oninput = (e) => {
+          const r = parseFloat(e.target.value) || 1.8;
+          this.ghostSystem.triggerRadius = r;
+          document.getElementById('ghost-radius-val').textContent = `${r.toFixed(1)}m`;
+        };
+
+        document.getElementById('chk-ghost-show-pads').onchange = (e) => {
+          this.ghostSystem.setShowPads(e.target.checked);
+        };
+
+        document.getElementById('chk-ghost-stealth').onchange = (e) => {
+          this.ghostSystem.setStealthMode(e.target.checked);
+        };
+
+        document.getElementById('chk-ghost-sound').onchange = (e) => {
+          this.ghostSystem.soundEnabled = e.target.checked;
+        };
+
+        document.getElementById('btn-test-all-ghosts').onclick = () => {
+          this.ghostSystem.triggerAllNow(() => {
+            if (this.activeCharacter) this.activeCharacter.triggerScareReaction();
+          });
+        };
+
+        document.getElementById('btn-export-haunted-glb').onclick = () => this._exportHauntedGLB();
+
+        // Lip-Sync Panel Controls
+        const lipPanel = document.getElementById('lipsync-panel');
+        document.getElementById('btn-lipsync-toggle').onclick = () => lipPanel.classList.toggle('hidden');
+        document.getElementById('btn-close-lipsync').onclick = () => lipPanel.classList.add('hidden');
+
+        document.getElementById('btn-mic-toggle').onclick = async () => {
+          if (this.lipSync.mode === 'mic') {
+            this.lipSync.stop();
+          } else {
+            try {
+              await this.lipSync.startMicrophone();
+              this.showToast('マイク入力リップシンクを開始しました', 'sky');
+            } catch (err) {
+              this.showToast('マイクの使用が許可されませんでした', 'rose');
+            }
+          }
+        };
+
+        document.getElementById('btn-lipsync-stop').onclick = () => this.lipSync.stop();
+
+        const audioPlayer = document.getElementById('lipsync-audio-player');
+        document.getElementById('input-audio-file').onchange = (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const url = URL.createObjectURL(file);
+          audioPlayer.src = url;
+          audioPlayer.classList.remove('hidden');
+          this.lipSync.attachAudioElement(audioPlayer);
+          audioPlayer.play().catch(() => {});
+        };
+
+        document.getElementById('btn-test-speech').onclick = () => this.lipSync.startSynthDemo();
+
+        // Global Drag & Drop
+        const dropOverlay = document.getElementById('global-drop-overlay');
+        let dragCounter = 0;
+
+        window.addEventListener('dragenter', (e) => {
+          e.preventDefault();
+          dragCounter++;
+          dropOverlay.classList.remove('hidden');
+          dropOverlay.classList.add('flex');
+        });
+        window.addEventListener('dragleave', (e) => {
+          e.preventDefault();
+          dragCounter = Math.max(0, dragCounter - 1);
+          if (dragCounter === 0) {
+            dropOverlay.classList.add('hidden');
+            dropOverlay.classList.remove('flex');
+          }
+        });
+        window.addEventListener('dragover', (e) => e.preventDefault());
+        window.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          dragCounter = 0;
+          dropOverlay.classList.add('hidden');
+          dropOverlay.classList.remove('flex');
+          if (e.dataTransfer) {
+            const collected = await FolderFileCollector.fromDataTransfer(e.dataTransfer);
+            await this.handleIncomingFiles(collected);
+          }
+        });
+      }
+
+      _raycastStageFloor(clientX, clientY) {
+        if (this.stageWorld.colliders.length === 0) return null;
+        this.mouseNDC.x = (clientX / window.innerWidth) * 2 - 1;
+        this.mouseNDC.y = -(clientY / window.innerHeight) * 2 + 1;
+        this.raycaster.setFromCamera(this.mouseNDC, this.camera);
+        this.raycaster.far = 120;
+        const hits = this.raycaster.intersectObjects(this.stageWorld.colliders, false);
+        for (const h of hits) {
+          if (h.face) {
+            const wn = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+            if (wn.y >= 0.65) return h.point.clone();
+          } else {
+            return h.point.clone();
+          }
+        }
+        return null;
       }
     }
 
     window.addEventListener('DOMContentLoaded', () => {
-      window.studioApp = new PMXMultiStudioApp();
+      window.studioApp = new StudioApp();
     });
   </script>
 </body>
