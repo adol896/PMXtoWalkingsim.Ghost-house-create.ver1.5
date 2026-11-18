@@ -37,6 +37,10 @@
       color: #f1f5f9;
       touch-action: none;
     }
+    input[type="number"], input[type="text"], select {
+      user-select: text;
+      -webkit-user-select: text;
+    }
     #canvas-container {
       position: fixed;
       inset: 0;
@@ -50,7 +54,7 @@
       height: 100%;
     }
     .studio-panel {
-      background: rgba(13, 19, 33, 0.84);
+      background: rgba(13, 19, 33, 0.86);
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
       border: 1px solid rgba(148, 163, 184, 0.22);
@@ -102,6 +106,40 @@
 <body>
   <!-- 3D Viewport -->
   <div id="canvas-container"></div>
+
+  <!-- Loading Overlay (Prevents WebGL contention during heavy PMX/GLB parsing) -->
+  <div id="loading-overlay" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/80 backdrop-blur-md">
+    <div class="studio-panel rounded-3xl px-7 py-6 border border-sky-400/40 text-center max-w-sm mx-4">
+      <div class="w-10 h-10 mx-auto mb-3 border-4 border-sky-400 border-t-transparent rounded-full animate-spin"></div>
+      <div id="loading-title" class="text-sm font-bold text-white">モデルを読み込み中...</div>
+      <p id="loading-subtitle" class="text-xs text-slate-300 mt-1">テクスチャ最適化とボーン構築を行っています</p>
+    </div>
+  </div>
+
+  <!-- PMX Folder Variant Selection Modal (Shown when a folder contains multiple .pmx/.pmd files) -->
+  <div id="pmx-select-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+    <div class="studio-panel rounded-3xl w-full max-w-lg p-6 border border-sky-400/40 space-y-4">
+      <div class="flex items-start justify-between gap-3 border-b border-slate-700/70 pb-3">
+        <div>
+          <span class="text-[11px] font-semibold text-sky-400 uppercase tracking-wider">PMX Folder Loader</span>
+          <h3 class="text-base sm:text-lg font-bold text-white mt-0.5">フォルダ内に複数のPMXが見つかりました</h3>
+          <p class="text-xs text-slate-300 mt-1">
+            メモリ不足による強制終了を防ぐため、読み込むモデルを選択してください（通常は1体ずつの読み込みを推奨します）。
+          </p>
+        </div>
+        <button id="btn-close-pmx-select" class="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-white/10">✕</button>
+      </div>
+      <div id="pmx-select-list" class="max-h-64 overflow-y-auto space-y-1.5 pr-1"></div>
+      <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-700/70">
+        <button id="btn-pmx-select-cancel" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 border border-slate-600/60">
+          キャンセル
+        </button>
+        <button id="btn-pmx-select-confirm" class="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-xs font-bold text-white shadow-lg shadow-sky-900/50">
+          選択したモデルを読み込む
+        </button>
+      </div>
+    </div>
+  </div>
 
   <!-- Global Drag Overlay -->
   <div id="global-drop-overlay" class="fixed inset-0 z-50 hidden items-center justify-center bg-sky-950/75 backdrop-blur-md border-4 border-dashed border-sky-400 pointer-events-none">
@@ -183,8 +221,8 @@
 
       <!-- Time of Day / Lighting Cycle -->
       <button id="btn-lighting" class="studio-panel studio-btn rounded-xl px-3 py-2 text-xs sm:text-sm font-medium text-indigo-200 border-indigo-400/30 flex items-center gap-1.5" title="環境ライティング切替">
-        <span id="lighting-icon">☀️</span>
-        <span id="lighting-label" class="hidden lg:inline">昼間</span>
+        <span id="lighting-icon">🌆</span>
+        <span id="lighting-label" class="hidden lg:inline">夕暮れ</span>
       </button>
 
       <!-- First-Person / Third-Person View Toggle (V key) -->
@@ -208,7 +246,7 @@
     </div>
 
     <!-- RIGHT-SIDE BATCH MANAGEMENT DRAWER -->
-    <aside id="manager-drawer" class="fixed top-16 right-3 bottom-20 z-20 w-[92vw] sm:w-[395px] studio-panel rounded-2xl flex flex-col overflow-hidden border border-slate-600/40 transition-transform duration-200">
+    <aside id="manager-drawer" class="fixed top-16 right-3 bottom-20 z-20 w-[92vw] sm:w-[405px] studio-panel rounded-2xl flex flex-col overflow-hidden border border-slate-600/40 transition-transform duration-200">
       <!-- Drawer Tabs -->
       <div class="flex border-b border-slate-700/70 bg-slate-950/60 text-xs font-semibold">
         <button data-tab="chars" class="drawer-tab flex-1 py-2.5 px-2 text-sky-300 border-b-2 border-sky-400 bg-sky-950/30 transition">
@@ -292,7 +330,7 @@
         <div id="motion-list" class="flex-1 overflow-y-auto space-y-2 pr-0.5"></div>
       </div>
 
-      <!-- TAB 3: ENVIRONMENT STAGE & HAUNTED HOUSE CONTROLS -->
+      <!-- TAB 3: ENVIRONMENT STAGE, SPAWN POINT & HAUNTED HOUSE CONTROLS -->
       <div id="panel-stage" class="drawer-panel hidden flex-1 flex flex-col overflow-y-auto p-3 gap-3 text-xs">
         <div class="rounded-xl bg-slate-900/75 p-3 border border-slate-700/60 space-y-2.5">
           <div class="flex items-center justify-between gap-1">
@@ -322,16 +360,60 @@
             </div>
             <input id="drawer-stage-scale" type="range" min="0.1" max="2.5" step="0.1" value="1.0" class="w-full accent-amber-400 cursor-pointer" />
           </div>
+        </div>
 
-          <button id="btn-drawer-reset-pos" class="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600/60 font-medium transition">
-            🧭 操作キャラを初期位置へ戻す (Rキー)
-          </button>
+        <!-- Initial Spawn Position Editor Card -->
+        <div class="rounded-xl bg-slate-900/75 p-3 border border-sky-500/35 space-y-2.5">
+          <div class="flex items-center justify-between">
+            <span class="font-semibold text-sky-300">🧭 初期位置（スタート地点）設定</span>
+            <span id="spawn-pos-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-sky-950/90 text-sky-200 border border-sky-500/30">
+              (0.0, 0.0, 2.5)
+            </span>
+          </div>
+
+          <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+            <button id="btn-set-spawn-here" class="py-1.5 px-2 rounded-lg bg-sky-800/80 hover:bg-sky-700 text-white border border-sky-400/40 font-semibold transition">
+              📍 現在地を初期位置に
+            </button>
+            <button id="btn-toggle-spawn-click" class="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-200 border border-cyan-500/40 font-semibold transition flex items-center justify-center gap-1">
+              <span>🎯 地面クリック指定:</span>
+              <span id="spawn-click-badge" class="text-slate-400">OFF</span>
+            </button>
+          </div>
+
+          <div class="grid grid-cols-4 gap-1 text-[10px]">
+            <label class="bg-slate-950/80 border border-slate-700/70 rounded-lg px-1.5 py-1 flex flex-col">
+              <span class="text-slate-400">X (横)</span>
+              <input id="input-spawn-x" type="number" step="0.1" value="0.0" class="bg-transparent text-slate-100 font-mono focus:outline-none w-full" />
+            </label>
+            <label class="bg-slate-950/80 border border-slate-700/70 rounded-lg px-1.5 py-1 flex flex-col">
+              <span class="text-slate-400">Y (高さ)</span>
+              <input id="input-spawn-y" type="number" step="0.1" value="0.0" class="bg-transparent text-slate-100 font-mono focus:outline-none w-full" />
+            </label>
+            <label class="bg-slate-950/80 border border-slate-700/70 rounded-lg px-1.5 py-1 flex flex-col">
+              <span class="text-slate-400">Z (奥行)</span>
+              <input id="input-spawn-z" type="number" step="0.1" value="2.5" class="bg-transparent text-slate-100 font-mono focus:outline-none w-full" />
+            </label>
+            <label class="bg-slate-950/80 border border-slate-700/70 rounded-lg px-1.5 py-1 flex flex-col">
+              <span class="text-slate-400">向き(度)</span>
+              <input id="input-spawn-yaw" type="number" step="15" value="180" class="bg-transparent text-slate-100 font-mono focus:outline-none w-full" />
+            </label>
+          </div>
+
+          <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+            <button id="btn-apply-spawn-inputs" class="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-200 border border-slate-600/60 font-medium transition">
+              ✓ 入力座標を適用
+            </button>
+            <button id="btn-drawer-reset-pos" class="py-1.5 px-2 rounded-lg bg-emerald-900/60 hover:bg-emerald-800/70 text-emerald-100 border border-emerald-500/40 font-semibold transition">
+              🧭 初期位置へ戻る (R)
+            </button>
+          </div>
         </div>
 
         <!-- Custom Ghost & Motion Placement -->
         <div class="rounded-xl bg-slate-900/75 p-3 border border-purple-500/35 space-y-2.5">
           <div class="flex items-center justify-between">
-            <span class="font-semibold text-purple-300">👻 カスタム妖怪＆モーション配置</span>
+            <span class="font-semibold text-purple-300">👻 カスタム妖怪＆足元出現ポイント</span>
             <span id="ghost-gimmick-count" class="text-[10px] px-2 py-0.5 rounded bg-purple-950/90 text-purple-200 border border-purple-500/30">0体稼働中</span>
           </div>
 
@@ -365,14 +447,14 @@
 
           <!-- Step 3: Place at Desired Location -->
           <div class="space-y-1">
-            <div class="text-[10px] text-slate-400 font-medium">③ 好きな場所に配置:</div>
+            <div class="text-[10px] text-slate-400 font-medium">③ 足元の出現ポイントを設置:</div>
             <div class="grid grid-cols-2 gap-1.5 text-[11px]">
               <button id="btn-toggle-click-place" class="py-2 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-200 border border-emerald-500/40 font-semibold transition flex items-center justify-center gap-1">
-                <span>🎯 地面クリック配置:</span>
+                <span>🎯 床クリック設置:</span>
                 <span id="click-place-badge" class="text-slate-400">OFF</span>
               </button>
               <button id="btn-spawn-in-front" class="py-2 px-2 rounded-lg bg-purple-700/80 hover:bg-purple-600/85 text-white border border-purple-400/50 font-semibold transition">
-                📍 目の前に配置
+                📍 目の前の床に設置
               </button>
             </div>
           </div>
@@ -380,11 +462,11 @@
           <!-- Placed Ghosts Individual Manager List -->
           <div class="space-y-1 pt-1 border-t border-slate-800">
             <div class="flex items-center justify-between text-[10px] text-slate-400">
-              <span>配置済みオバケ個別設定 (モーション変更・試す):</span>
+              <span>設置済みオバケ個別設定 (モーション変更・試す):</span>
             </div>
             <div id="placed-ghost-list" class="max-h-36 overflow-y-auto space-y-1.5 pr-0.5">
               <div class="text-[10px] text-slate-500 text-center py-2 bg-slate-950/50 rounded-lg border border-slate-800/80">
-                まだ配置されていません（地面クリックまたは「目の前に配置」で追加）
+                まだ設置されていません（床クリックまたは「目の前の床に設置」で追加）
               </div>
             </div>
           </div>
@@ -402,16 +484,23 @@
           <div class="pt-1 border-t border-slate-800 space-y-2">
             <div>
               <div class="flex items-center justify-between text-[11px] text-slate-300 mb-1">
-                <span>脅かし感知距離 (トリガー半径)</span>
-                <span id="ghost-radius-val" class="font-mono text-purple-300">3.5m</span>
+                <span>足元ポイント接触判定半径 (頭上・別階は除外)</span>
+                <span id="ghost-radius-val" class="font-mono text-purple-300">1.8m</span>
               </div>
-              <input id="ghost-trigger-radius" type="range" min="1.5" max="8.0" step="0.5" value="3.5" class="w-full accent-purple-400 cursor-pointer" />
+              <input id="ghost-trigger-radius" type="range" min="0.6" max="4.5" step="0.1" value="1.8" class="w-full accent-purple-400 cursor-pointer" />
+            </div>
+
+            <div class="flex items-center justify-between text-[11px] text-slate-300">
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input id="chk-ghost-show-pads" type="checkbox" class="accent-purple-400 rounded" />
+                <span>足元の出現ポイント輪っかを常時表示</span>
+              </label>
             </div>
 
             <div class="flex items-center justify-between text-[11px] text-slate-300">
               <label class="flex items-center gap-1.5 cursor-pointer">
                 <input id="chk-ghost-stealth" type="checkbox" checked class="accent-purple-400 rounded" />
-                <span>脅かす時だけ出現 (普段は隠れる)</span>
+                <span>脅かす時だけお化け出現 (普段は潜伏)</span>
               </label>
             </div>
 
@@ -555,7 +644,7 @@
           <div>
             <span class="text-xs font-semibold text-sky-300 bg-sky-950/80 px-2.5 py-1 rounded-lg border border-sky-500/30">1. PMXキャラ追加</span>
             <p class="text-xs text-slate-300 mt-2.5 leading-relaxed">
-              <code class="text-sky-300">.pmx / .pmd</code> を複数追加して乗り移り操作できます。テクスチャは<strong>フォルダごと</strong>選択してください。
+              <code class="text-sky-300">.pmx / .pmd</code> を追加して乗り移り操作できます。テクスチャは<strong>フォルダごと</strong>選択してください（複数PMX入りの場合は選択画面が開きます）。
             </p>
             <div id="modal-char-status" class="mt-2.5 text-[11px] font-medium text-emerald-300 bg-emerald-950/40 border border-emerald-500/25 rounded-lg px-2.5 py-1.5">
               登録済: 1体 (標準モデル)
@@ -740,7 +829,7 @@
           if (!fileMap.has(base)) fileMap.set(base, file);
 
           if (base.endsWith('.pmx') || base.endsWith('.pmd')) {
-            pmxFiles.push({ file, depth: segments.length });
+            pmxFiles.push({ file, relPath, depth: segments.length });
           } else if (base.endsWith('.vmd') || base.endsWith('.vpd')) {
             motionFiles.push(file);
           } else if (base.endsWith('.glb') || base.endsWith('.gltf')) {
@@ -750,6 +839,7 @@
 
         pmxFiles.sort((a, b) => a.depth - b.depth);
         return {
+          pmxEntries: pmxFiles,
           pmxFiles: pmxFiles.map((p) => p.file),
           motionFiles,
           stageFiles,
@@ -1012,19 +1102,26 @@
           emissiveIntensity: 2.2
         });
 
-        const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.018, 0.16, 12), bodyMat);
+        // Offset forward along +Z so the flashlight head extends cleanly out of the hand without clipping
+        const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.016, 0.16, 12), bodyMat);
         grip.rotation.x = Math.PI / 2;
+        grip.position.z = 0.04;
         group.add(grip);
 
-        const lens = new THREE.Mesh(new THREE.CircleGeometry(0.028, 12), lensMat);
-        lens.position.z = 0.082;
+        const headRim = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.019, 0.04, 12), bodyMat);
+        headRim.rotation.x = Math.PI / 2;
+        headRim.position.z = 0.125;
+        group.add(headRim);
+
+        const lens = new THREE.Mesh(new THREE.CircleGeometry(0.022, 12), lensMat);
+        lens.position.z = 0.146;
         group.add(lens);
 
         const spot = new THREE.SpotLight(0xfff5db, 9.5, 32, Math.PI / 4.5, 0.5, 1.2);
-        spot.position.set(0, 0, 0.1);
+        spot.position.set(0, 0, 0.15);
         spot.castShadow = true;
         const target = new THREE.Object3D();
-        target.position.set(0, -0.5, 6.0);
+        target.position.set(0, 0, 6.0);
         group.add(target);
         spot.target = target;
         group.add(spot);
@@ -1067,12 +1164,12 @@
           const scale = this.pmxMesh.scale.x || 1;
           const inv = 1 / scale;
           this.flashlightGroup.scale.setScalar(inv);
-          this.flashlightGroup.position.set(-0.06 * inv, -0.02 * inv, 0.02 * inv);
+          this.flashlightGroup.position.set(-0.035 * inv, -0.045 * inv, 0.05 * inv);
           this.flashlightGroup.rotation.set(0, 0, 0);
         } else if (this.bones.rightHand) {
           this.bones.rightHand.add(this.flashlightGroup);
           this.flashlightGroup.scale.setScalar(1);
-          this.flashlightGroup.position.set(0, -0.02, 0.04);
+          this.flashlightGroup.position.set(0, -0.038, 0.05);
           this.flashlightGroup.rotation.set(0, 0, 0);
         }
       }
@@ -1251,7 +1348,7 @@
         });
 
         rightArm.hand.add(this.flashlightGroup);
-        this.flashlightGroup.position.set(0, -0.02, 0.04);
+        this.flashlightGroup.position.set(0, -0.038, 0.05);
         this.hasFootAndToeIK = true;
         if (this.isFirstPersonHidden) {
           this.setFirstPersonHidden(true);
@@ -1282,6 +1379,66 @@
         return c.toDataURL('image/png');
       }
 
+      async _optimizeTextureFile(file, maxDim = 1536) {
+        const lower = file.name.toLowerCase();
+        if (lower.endsWith('.tga')) {
+          try {
+            const buf = await file.arrayBuffer();
+            const tgaLoader = new TGALoader();
+            const parsed = tgaLoader.parse(buf);
+            const canvas = document.createElement('canvas');
+            const scale = Math.min(1, maxDim / Math.max(parsed.width, parsed.height));
+            canvas.width = Math.max(1, Math.round(parsed.width * scale));
+            canvas.height = Math.max(1, Math.round(parsed.height * scale));
+            const ctx = canvas.getContext('2d');
+
+            const tmpCanvas = document.createElement('canvas');
+            tmpCanvas.width = parsed.width;
+            tmpCanvas.height = parsed.height;
+            const tmpCtx = tmpCanvas.getContext('2d');
+            const imgData = tmpCtx.createImageData(parsed.width, parsed.height);
+            imgData.data.set(parsed.data);
+            tmpCtx.putImageData(imgData, 0, 0);
+
+            ctx.drawImage(tmpCanvas, 0, 0, canvas.width, canvas.height);
+            return await new Promise((resolve) => {
+              canvas.toBlob((blob) => {
+                resolve(blob ? URL.createObjectURL(blob) : null);
+              }, 'image/png');
+            });
+          } catch (_) {
+            return null;
+          }
+        }
+
+        const rawUrl = URL.createObjectURL(file);
+        try {
+          const img = await new Promise((resolve, reject) => {
+            const im = new Image();
+            im.onload = () => resolve(im);
+            im.onerror = reject;
+            im.src = rawUrl;
+          });
+          if (img.width <= maxDim && img.height <= maxDim) {
+            return rawUrl;
+          }
+          const scale = maxDim / Math.max(img.width, img.height);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(rawUrl);
+          return await new Promise((resolve) => {
+            canvas.toBlob((blob) => {
+              resolve(blob ? URL.createObjectURL(blob) : null);
+            }, 'image/png');
+          });
+        } catch (_) {
+          return rawUrl;
+        }
+      }
+
       async loadPMXFromFile(file, fileMap = new Map()) {
         const opaqueBaseFallbackUrl = this._createSolidPngDataUrl(218, 214, 208, 255);
         const opaqueBlackFallbackUrl = this._createSolidPngDataUrl(0, 0, 0, 255);
@@ -1290,6 +1447,20 @@
         const pmxBlobUrl = URL.createObjectURL(file);
         const pmxBaseUrl = THREE.LoaderUtils.extractUrlBase(pmxBlobUrl);
         const createdBlobUrls = new Set([pmxBlobUrl]);
+        const preConvertedTexUrls = new Map();
+
+        // Pre-optimize textures in fileMap to prevent GPU OOM tab crashes on 4K/8K textures or TGA files
+        for (const [key, texFile] of fileMap.entries()) {
+          const lowerName = texFile.name.toLowerCase();
+          if (/\.(png|jpg|jpeg|bmp|tga|sph|spa|webp)$/i.test(lowerName) && !preConvertedTexUrls.has(texFile)) {
+            const optUrl = await this._optimizeTextureFile(texFile, 1536);
+            if (optUrl) {
+              preConvertedTexUrls.set(texFile, optUrl);
+              createdBlobUrls.add(optUrl);
+            }
+          }
+        }
+
         const manager = new THREE.LoadingManager();
 
         manager.setURLModifier((requestedUrl) => {
@@ -1333,10 +1504,15 @@
             matchedFile = fileMap.get(baseName);
           }
 
-          if (matchedFile && !matchedFile.name.toLowerCase().endsWith('.tga')) {
-            const texBlobUrl = URL.createObjectURL(matchedFile);
-            createdBlobUrls.add(texBlobUrl);
-            return texBlobUrl;
+          if (matchedFile) {
+            if (preConvertedTexUrls.has(matchedFile)) {
+              return preConvertedTexUrls.get(matchedFile);
+            }
+            if (!matchedFile.name.toLowerCase().endsWith('.tga')) {
+              const texBlobUrl = URL.createObjectURL(matchedFile);
+              createdBlobUrls.add(texBlobUrl);
+              return texBlobUrl;
+            }
           }
 
           if (baseName.endsWith('.spa')) return opaqueBlackFallbackUrl;
@@ -1477,7 +1653,7 @@
           handBone.add(this.flashlightGroup);
           const inv = 1 / scale;
           this.flashlightGroup.scale.setScalar(inv);
-          this.flashlightGroup.position.set(-0.06 * inv, -0.02 * inv, 0.02 * inv);
+          this.flashlightGroup.position.set(-0.035 * inv, -0.045 * inv, 0.05 * inv);
 
           this.setExpression(this.expressionMode);
           if (this.isFirstPersonHidden) {
@@ -1488,7 +1664,7 @@
             createdBlobUrls.forEach((u) => {
               try { URL.revokeObjectURL(u); } catch (_) {}
             });
-          }, 8000);
+          }, 12000);
         }
       }
 
@@ -1569,12 +1745,10 @@
           }
         }
 
-        // If playing VMD animation via MMDAnimationHelper
         if (this.motionState === 'vmd_playing') {
           if (this.helper) {
             this.helper.update(dt);
           } else {
-            // Subtle rhythmic dance motion for default procedural character
             if (this.bones.hips) {
               this.bones.hips.position.y = 0.92 + Math.abs(Math.sin(this.idleTime * 5.0)) * 0.05;
               this.bones.hips.rotation.y = Math.sin(this.idleTime * 2.5) * 0.25;
@@ -1587,7 +1761,6 @@
         } else if (this.motionState === 'vpd_pose' || this.motionState === 'vmd_paused') {
           // Hold current pose
         } else {
-          // Procedural Natural Walk & Idle
           const targetBlend = speedRatio > 0.05 ? 1 : 0;
           this.moveBlend += (targetBlend - this.moveBlend) * Math.min(1, dt * 8.5);
           if (speedRatio > 0.05) {
@@ -1628,15 +1801,29 @@
           }
           if (b.rightUpperArm && b.rightLowerArm) {
             if (this.flashlightOn) {
-              b.rightUpperArm.rotation.z = this.isPMX ? 0.72 : -0.08;
-              b.rightUpperArm.rotation.x = -0.2 + breath * 0.015;
-              b.rightLowerArm.rotation.x = -0.78;
+              b.rightUpperArm.rotation.z = this.isPMX ? 0.62 : -0.06;
+              b.rightUpperArm.rotation.x = -0.38 + breath * 0.015;
+              b.rightLowerArm.rotation.x = -0.52;
             } else {
               b.rightUpperArm.rotation.z = this.isPMX ? 0.74 : -0.08;
               b.rightUpperArm.rotation.x = -0.04 + swing * 0.44;
               b.rightLowerArm.rotation.x = -0.22 - Math.max(0, swing) * 0.24;
             }
           }
+        }
+
+        // Keep handheld flashlight aimed straight ahead and slightly downward (never upward)
+        if (this.flashlightOn && this.flashlightGroup && !this.isFirstPersonHidden) {
+          this.root.updateMatrixWorld(true);
+          const worldPos = new THREE.Vector3();
+          this.flashlightGroup.getWorldPosition(worldPos);
+          const charYaw = this.root.rotation.y;
+          const aimTarget = new THREE.Vector3(
+            worldPos.x + Math.sin(charYaw) * 6.0,
+            worldPos.y - 1.35,
+            worldPos.z + Math.cos(charYaw) * 6.0
+          );
+          this.flashlightGroup.lookAt(aimTarget);
         }
 
         // Apply Lip-Sync Vowels if provided
@@ -1735,7 +1922,6 @@
           this.dirLight.color.setHex(0xfdba74);
           this.dirLight.intensity = 1.1;
         } else {
-          // Haunted Night
           this.scene.background.setHex(0x050710);
           this.scene.fog.color.setHex(0x050710);
           this.scene.fog.density = 0.022;
@@ -1812,12 +1998,10 @@
           return m;
         };
 
-        // Main Ground
         addBox(36, 0.5, 36, stoneMat, 0, -0.25, -4);
         addBox(8, 0.24, 10, grassMat, -11, 0.12, -2);
         addBox(8, 0.24, 10, grassMat, 11, 0.12, -2);
 
-        // Central Staircase (10 steps to y = 1.8m)
         const steps = 10;
         const totalH = 1.8;
         for (let i = 0; i < steps; i++) {
@@ -1825,16 +2009,13 @@
           addBox(4.4, h, 0.48, trimMat, 0, h / 2, -4.0 - i * 0.45);
         }
 
-        // Upper Terrace
         addBox(18, totalH, 9, stoneMat, 0, totalH / 2, -12.8);
         addBox(6.5, 1.0, 0.25, trimMat, -5.6, totalH + 0.5, -8.4);
         addBox(6.5, 1.0, 0.25, trimMat, 5.6, totalH + 0.5, -8.4);
         addBox(18, 1.0, 0.25, trimMat, 0, totalH + 0.5, -17.1);
 
-        // Sloped Ramp on Right
         addBox(3.2, 0.25, 6.2, woodMat, 6.8, totalH / 2 - 0.08, -5.6, Math.atan2(totalH, 5.8), 0, 0);
 
-        // Arched Wooden Footbridge on Left
         for (let i = 0; i < 14; i++) {
           const t = (i + 0.5) / 14;
           const bz = 2.0 - t * 6.5;
@@ -1842,7 +2023,6 @@
           addBox(2.6, 0.16, 0.52, woodMat, -6.5, by, bz);
         }
 
-        // Stone Lanterns
         [[-2.8, 0, -3.6], [2.8, 0, -3.6], [-2.8, totalH, -8.4], [2.8, totalH, -8.4]].forEach(([lx, ly, lz]) => {
           addBox(0.45, 1.4, 0.45, trimMat, lx, ly + 0.7, lz);
           const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.38, 0.42), lampGlowMat);
@@ -1894,19 +2074,16 @@
           return m;
         };
 
-        // Main Dark Wooden Foundation & Tatami Halls
         addBox(30, 0.5, 34, woodMat, 0, -0.25, -2, 'Haunted_MainFloor');
         addBox(7.2, 0.08, 7.2, tatamiMat, -5.2, 0.04, -1.5, 'Tatami_WestRoom');
         addBox(7.2, 0.08, 7.2, tatamiMat, 5.2, 0.04, -1.5, 'Tatami_EastRoom');
         addBox(12.0, 0.08, 6.5, tatamiMat, 0, 0.04, -10.5, 'Tatami_InnerSanctum');
 
-        // Entrance Red Torii Gate at z = +5.2
         addBox(0.32, 3.2, 0.32, toriiRedMat, -1.5, 1.6, 5.2, 'Torii_PillarL');
         addBox(0.32, 3.2, 0.32, toriiRedMat, 1.5, 1.6, 5.2, 'Torii_PillarR');
         addBox(4.2, 0.28, 0.44, toriiRedMat, 0, 3.2, 5.2, 'Torii_Kasagi');
         addBox(3.5, 0.2, 0.28, toriiRedMat, 0, 2.55, 5.2, 'Torii_Nuki');
 
-        // Corridor Pillars & Ofuda Talismans
         const pillarCoords = [
           [-2.2, 1.6], [2.2, 1.6],
           [-2.2, -5.4], [2.2, -5.4],
@@ -1929,22 +2106,18 @@
           }
         });
 
-        // Outer Perimeter Walls
         addBox(24, 3.2, 0.35, wallMat, 0, 1.6, -14.2, 'OuterWall_North');
         addBox(0.35, 3.2, 20, wallMat, -10.5, 1.6, -4.2, 'OuterWall_West');
         addBox(0.35, 3.2, 20, wallMat, 10.5, 1.6, -4.2, 'OuterWall_East');
 
-        // Interior Shoji Screens with walkable doorway gaps
         addBox(0.12, 2.5, 2.4, shojiMat, -2.2, 1.25, 0.2, 'Shoji_Bay_ajar_W1');
         addBox(0.12, 2.5, 2.4, shojiMat, -2.2, 1.25, -4.0, 'Shoji_Bay_torn_W2');
         addBox(0.12, 2.5, 2.4, shojiMat, 2.2, 1.25, 0.2, 'Shoji_Bay_torn_E1');
         addBox(0.12, 2.5, 2.4, shojiMat, 2.2, 1.25, -4.0, 'Shoji_Bay_ajar_E2');
 
-        // North Sanctum Partition
         addBox(4.2, 2.6, 0.22, shojiMat, -4.5, 1.3, -6.8, 'Shoji_Bay_torn_N1');
         addBox(4.2, 2.6, 0.22, shojiMat, 4.5, 1.3, -6.8, 'Shoji_Bay_ajar_N2');
 
-        // Inner Sanctum Altar Platform
         addBox(4.6, 0.36, 2.6, woodMat, 0, 0.18, -12.0, 'Sanctum_Altar_Step');
         addBox(2.4, 0.72, 1.4, toriiRedMat, 0, 0.36, -12.4, 'Sanctum_Shrine_Box');
 
@@ -2022,8 +2195,6 @@
 
       sampleStrictFloor(x, z, refFootY = 0, maxStepDiff = 1.35) {
         if (this.colliders.length === 0) return 0;
-        // Start raycast at waist/chest height relative to character's foot level
-        // so roofs, ceilings, and upper wall tops are completely ignored
         const origin = new THREE.Vector3(x, refFootY + 1.15, z);
         this.raycaster.set(origin, this.downDir);
         this.raycaster.far = 4.5;
@@ -2033,7 +2204,6 @@
           if (Math.abs(dy) > maxStepDiff) continue;
           if (h.face) {
             const wn = h.face.normal.clone().transformDirection(h.object.matrixWorld);
-            // Must be a flat walkable floor surface (not a vertical wall or steep slope)
             if (wn.y < 0.75) continue;
           }
           return h.point.y;
@@ -2044,7 +2214,6 @@
       isSpotClearOfObjects(x, floorY, z, clearanceRadius = 0.68) {
         if (this.colliders.length === 0) return true;
 
-        // 1. Verify flat floor support across the ghost's footprint (no stepping onto ledges/props)
         const footCheckR = 0.48;
         for (let i = 0; i < 8; i++) {
           const ang = (i / 8) * Math.PI * 2;
@@ -2056,7 +2225,6 @@
           }
         }
 
-        // 2. Multi-height horizontal clearance check so ghost never intersects walls, pillars, shoji, or GLB meshes
         const checkHeights = [0.22, 0.65, 1.15, 1.6];
         for (const hOffset of checkHeights) {
           const origin = new THREE.Vector3(x, floorY + hOffset, z);
@@ -2081,7 +2249,6 @@
           return new THREE.Vector3(targetX, directY, targetZ);
         }
 
-        // Spiral search around target point for nearest non-overlapping walkable floor
         for (let r = 0.4; r <= maxSearchRadius; r += 0.35) {
           const steps = Math.max(12, Math.round(r * 16));
           for (let i = 0; i < steps; i++) {
@@ -2100,7 +2267,6 @@
       }
 
       findCornerScareSpots(refFootY = 0, desiredCount = 12) {
-        // Determine horizontal bounds from stage colliders (clamped to reasonable playable area)
         const box = new THREE.Box3();
         if (this.colliders.length > 0) {
           this.stageGroup.updateMatrixWorld(true);
@@ -2120,7 +2286,6 @@
             if (floorY === null) continue;
             if (!this.isSpotClearOfObjects(x, floorY, z, 0.72)) continue;
 
-            // Analyze 8 surrounding directions at chest height to detect blind corners & doorway ambush points
             const eyeOrigin = new THREE.Vector3(x, floorY + 1.0, z);
             const wallNearby = new Array(8).fill(false);
             const openCorridor = new Array(8).fill(false);
@@ -2143,8 +2308,6 @@
             const wallCount = wallNearby.filter(Boolean).length;
             const openCount = openCorridor.filter(Boolean).length;
 
-            // Ideal corner ambush: 1 to 3 adjacent directions have cover (wall/pillar/shoji edge),
-            // while perpendicular directions open out into a walkable corridor
             let cornerScore = 0;
             if (wallCount >= 1 && wallCount <= 4 && openCount >= 2) {
               for (let d = 0; d < 8; d++) {
@@ -2157,7 +2320,6 @@
               }
             }
 
-            // Slight jitter so positions feel organic rather than rigid grid intersections
             candidates.push({
               pos: new THREE.Vector3(x, floorY, z),
               score: cornerScore + Math.random() * 0.9
@@ -2165,7 +2327,6 @@
           }
         }
 
-        // Prioritize high-scoring blind corners first, then distribute with minimum spacing
         candidates.sort((a, b) => b.score - a.score);
         const selected = [];
         for (const cand of candidates) {
@@ -2175,7 +2336,6 @@
           }
         }
 
-        // Relax spacing slightly if stage is compact and needs more spots
         if (selected.length < desiredCount) {
           for (const cand of candidates) {
             if (selected.length >= desiredCount) break;
@@ -2207,7 +2367,7 @@
     }
 
     // =========================================================================
-    // 5. JAPANESE YOKAI / GHOST GIMMICK & CUSTOM MOTION SYSTEM
+    // 5. JAPANESE YOKAI / GHOST GIMMICK & FOOT-LEVEL SPAWN POINT SYSTEM
     // =========================================================================
     class GhostGimmickSystem {
       constructor(scene) {
@@ -2216,10 +2376,19 @@
         this.spawnedGroup.name = 'SpawnedJapaneseGhosts';
         this.scene.add(this.spawnedGroup);
 
+        this.padGroup = new THREE.Group();
+        this.padGroup.name = 'GhostFootSpawnPads';
+        this.scene.add(this.padGroup);
+
         this.gimmicks = [];
-        this.triggerRadius = 3.5;
+        // Balanced foot-level touch radius (1.8m) + vertical floor check (<= 0.85m)
+        // so ghosts above head height or on different floors NEVER trigger falsely
+        this.triggerRadius = 1.8;
+        this.maxVerticalTouchDiff = 0.85;
         this.soundEnabled = true;
-        this.stealthMode = true; // Hide ghosts until scare trigger fires
+        this.stealthMode = true; // Hide ghost body until foot spawn point is touched
+        this.showSpawnPads = false; // Hide foot-level spawn point circle by default
+        this.uiHidden = false;
         this.audioCtx = null;
         this.screamDistortionCurve = null;
         this.time = 0;
@@ -2256,6 +2425,67 @@
         return group;
       }
 
+      _buildFootSpawnPad(pos, radius) {
+        const pad = new THREE.Group();
+        pad.position.copy(pos);
+
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.55
+        });
+        const ring = new THREE.Mesh(new THREE.RingGeometry(0.88, 1.0, 36), ringMat);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.025;
+        ring.scale.setScalar(radius);
+
+        const discMat = new THREE.MeshBasicMaterial({
+          color: 0x7e22ce,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.14
+        });
+        const disc = new THREE.Mesh(new THREE.CircleGeometry(1.0, 32), discMat);
+        disc.rotation.x = -Math.PI / 2;
+        disc.position.y = 0.02;
+        disc.scale.setScalar(radius);
+
+        pad.add(ring, disc);
+        pad.userData = { ring, disc, ringMat, discMat };
+        pad.visible = this.showSpawnPads && !this.uiHidden;
+        this.padGroup.add(pad);
+        return pad;
+      }
+
+      setTriggerRadius(radius) {
+        this.triggerRadius = radius;
+        for (const g of this.gimmicks) {
+          if (g.pad && g.pad.userData) {
+            g.pad.userData.ring.scale.setScalar(radius);
+            g.pad.userData.disc.scale.setScalar(radius);
+          }
+        }
+      }
+
+      setShowSpawnPads(visible) {
+        this.showSpawnPads = Boolean(visible);
+        for (const g of this.gimmicks) {
+          if (g.pad) {
+            g.pad.visible = this.showSpawnPads && !this.uiHidden;
+          }
+        }
+      }
+
+      setUIHidden(hidden) {
+        this.uiHidden = Boolean(hidden);
+        for (const g of this.gimmicks) {
+          if (g.pad) {
+            g.pad.visible = this.showSpawnPads && !this.uiHidden;
+          }
+        }
+      }
+
       setReticlePosition(pos, visible = true) {
         if (!this.placementReticle) return;
         this.placementReticle.visible = visible;
@@ -2289,6 +2519,9 @@
 
       clearAll() {
         this.clearSpawnedGhosts();
+        while (this.padGroup.children.length > 0) {
+          this.padGroup.remove(this.padGroup.children[0]);
+        }
         this.gimmicks = [];
       }
 
@@ -2296,7 +2529,11 @@
         while (this.spawnedGroup.children.length > 0) {
           this.spawnedGroup.remove(this.spawnedGroup.children[0]);
         }
-        this.gimmicks = this.gimmicks.filter((g) => g.kind === 'glb');
+        this.gimmicks = this.gimmicks.filter((g) => {
+          if (g.kind === 'glb') return true;
+          if (g.pad && g.pad.parent) g.pad.parent.remove(g.pad);
+          return false;
+        });
       }
 
       removeGimmickById(id) {
@@ -2305,6 +2542,9 @@
         const target = this.gimmicks[idx];
         if (target.kind === 'builtin' && target.node && target.node.parent) {
           target.node.parent.remove(target.node);
+        }
+        if (target.pad && target.pad.parent) {
+          target.pad.parent.remove(target.pad);
         }
         this.gimmicks.splice(idx, 1);
         return true;
@@ -2343,10 +2583,11 @@
         this._activateScare(g, onScareCallback, false);
       }
 
-      scanGLBForTriggers(gltfScene, animations = []) {
+      scanGLBForTriggers(gltfScene, animations = [], stageWorld = null) {
         this.gimmicks = this.gimmicks.filter((g) => g.kind === 'builtin');
         if (!gltfScene) return 0;
 
+        gltfScene.updateMatrixWorld(true);
         const keywordRegex = /(ghost|obake|yokai|scare|trigger|おばけ|妖怪|幽霊)/i;
         let found = 0;
 
@@ -2377,6 +2618,16 @@
 
           obj.visible = !this.stealthMode;
 
+          const worldPos = new THREE.Vector3();
+          obj.getWorldPosition(worldPos);
+          let footY = worldPos.y;
+          if (stageWorld) {
+            const sampled = stageWorld.sampleGroundHeight(worldPos.x, worldPos.z, worldPos.y + 0.5);
+            if (sampled !== null) footY = sampled;
+          }
+          const footSpawnPos = new THREE.Vector3(worldPos.x, footY, worldPos.z);
+          const pad = this._buildFootSpawnPad(footSpawnPos, this.triggerRadius);
+
           this.gimmicks.push({
             id: `glb_ghost_${++this.spawnCounter}`,
             kind: 'glb',
@@ -2384,10 +2635,12 @@
             motionType: 'burst',
             name: obj.name,
             node: obj,
+            pad,
             mixer,
             idleAction,
             scareAction,
-            basePos: obj.position.clone(),
+            basePos: footSpawnPos.clone(),
+            nodeOrigPos: obj.position.clone(),
             baseScale: obj.scale.clone(),
             state: 'idle',
             stateTimer: 0,
@@ -2405,7 +2658,6 @@
         c.height = 128;
         const ctx = c.getContext('2d');
 
-        // Pale yellowed sclera
         const grad = ctx.createRadialGradient(64, 64, 14, 64, 64, 64);
         grad.addColorStop(0, '#fef9c3');
         grad.addColorStop(0.7, '#fde68a');
@@ -2413,7 +2665,6 @@
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, 128, 128);
 
-        // Bloodshot veins radiating from edges
         ctx.strokeStyle = 'rgba(185, 28, 28, 0.78)';
         ctx.lineWidth = 2;
         for (let i = 0; i < 18; i++) {
@@ -2429,7 +2680,6 @@
           ctx.stroke();
         }
 
-        // Iris & dilated/pinpoint pupil
         ctx.fillStyle = irisColor;
         ctx.beginPath();
         ctx.arc(64, 64, 21, 0, Math.PI * 2);
@@ -2450,7 +2700,6 @@
       }
 
       _buildJapaneseGhostMesh(type) {
-        // Every ghost model is built with local y = 0 strictly at its bottommost ground contact point
         const group = new THREE.Group();
         const parts = {};
 
@@ -2481,14 +2730,12 @@
           side: THREE.DoubleSide
         });
 
-        // Ground shadow / cursed mist pool at y = 0.01
         const shadowPool = new THREE.Mesh(new THREE.CircleGeometry(0.46, 20), auraShadowMat);
         shadowPool.rotation.x = -Math.PI / 2;
         shadowPool.position.y = 0.015;
         group.add(shadowPool);
 
         if (type === 'lantern') {
-          // Grounded rotting wooden stand + tattered crimson chochin lantern (y = 0 at base)
           const woodMat = new THREE.MeshStandardMaterial({ color: 0x1c1411, roughness: 0.9 });
           const lanternMat = new THREE.MeshStandardMaterial({
             color: 0x7f1d1d,
@@ -2505,7 +2752,6 @@
           const body = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.28, 0.78, 18), lanternMat);
           body.position.y = 0.98;
 
-          // Ribbing rings
           for (let r = 0; r < 4; r++) {
             const rib = new THREE.Mesh(new THREE.TorusGeometry(0.305, 0.014, 6, 18), woodMat);
             rib.rotation.x = Math.PI / 2;
@@ -2516,12 +2762,10 @@
           const capTop = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.33, 0.12, 16), woodMat);
           capTop.position.y = 1.42;
 
-          // Giant bloodshot single eye
           const eye = this._createBloodshotEyeMesh(0.145, '#dc2626');
           eye.scale.set(0.55, 1.05, 1.05);
           eye.position.set(0, 1.12, 0.27);
 
-          // Gaping jagged mouth with fangs & long wet tongue
           const mouthCavity = new THREE.Mesh(
             new THREE.BoxGeometry(0.36, 0.16, 0.14),
             new THREE.MeshBasicMaterial({ color: 0x090205 })
@@ -2550,7 +2794,6 @@
 
           group.add(standBase, standPost, body, capTop, eye, mouthCavity, tongue, light);
         } else if (type === 'umbrella') {
-          // Grounded Karakasa-Obake: Geta sandal right at y = 0
           const getaMat = new THREE.MeshStandardMaterial({ color: 0x291a12, roughness: 0.9 });
           const getaBase = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.04, 0.32), getaMat);
           getaBase.position.y = 0.09;
@@ -2575,7 +2818,6 @@
           canopy.position.y = 1.62;
           parts.canopy = canopy;
 
-          // Tattered hanging paper strips around umbrella rim
           for (let s = 0; s < 9; s++) {
             const a = (s / 9) * Math.PI * 2;
             const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.11, 0.24), canopyMat);
@@ -2598,7 +2840,6 @@
 
           group.add(getaBase, getaTooth, leg, shaft, canopy, eye, tongue);
         } else if (type === 'rokurokubi') {
-          // Grounded Rokurokubi: Kimono hem touches y = 0, serpentine extending neck
           const kimonoMat = new THREE.MeshStandardMaterial({ color: 0x2e1065, roughness: 0.88 });
           const obiMat = new THREE.MeshStandardMaterial({ color: 0x7f1d1d, roughness: 0.75 });
 
@@ -2617,7 +2858,6 @@
           const face = new THREE.Mesh(new THREE.SphereGeometry(0.155, 16, 16), corpseSkinMat);
           face.scale.set(0.88, 1.12, 0.92);
 
-          // Sunken dark eye sockets with glowing pupils
           [-0.052, 0.052].forEach((ex) => {
             const socket = new THREE.Mesh(
               new THREE.SphereGeometry(0.034, 10, 10),
@@ -2632,7 +2872,6 @@
             head.add(socket, glint);
           });
 
-          // Slit grinning mouth
           const slitMouth = new THREE.Mesh(
             new THREE.BoxGeometry(0.11, 0.038, 0.04),
             new THREE.MeshBasicMaterial({ color: 0x450a0a })
@@ -2640,7 +2879,6 @@
           slitMouth.position.set(0, -0.065, 0.132);
           head.add(slitMouth);
 
-          // Long disheveled black hair curtains
           for (let h = -3; h <= 3; h++) {
             const strand = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.62, 0.03), darkHairMat);
             strand.position.set(h * 0.046, -0.14, h === 0 ? -0.11 : 0.02);
@@ -2653,7 +2891,6 @@
 
           group.add(kimono, obi, neck, head);
         } else if (type === 'hitotsume') {
-          // Grounded Hitotsume-Kozo: Tattered monk robe touching y = 0
           const robeMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.92 });
           const robe = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.38, 1.08, 14), robeMat);
           robe.position.y = 0.54;
@@ -2686,7 +2923,6 @@
 
           group.add(robe, head, eye, mouth, beadRing);
         } else if (type === 'hitodama') {
-          // Grounded Cursed Brazier / Grave Mound with swirling ghostly blue-green souls rising from y = 0
           const stoneMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.95 });
           const graveBase = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.42, 0.32, 8), stoneMat);
           graveBase.position.y = 0.16;
@@ -2720,7 +2956,6 @@
           parts.light = light;
           group.add(light);
         } else if (type === 'skull') {
-          // Grounded Gashadokuro / Cursed Skeleton emerging from ground at y = 0
           const boneMat = new THREE.MeshStandardMaterial({
             color: 0xd6d3d1,
             emissive: 0x2e1065,
@@ -2730,7 +2965,6 @@
           const ribCage = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.28, 0.72, 10, 1, true), boneMat);
           ribCage.position.y = 0.36;
 
-          // Skeletal arms reaching forward
           [-0.26, 0.26].forEach((ax) => {
             const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.56, 8), boneMat);
             arm.position.set(ax, 0.68, 0.22);
@@ -2765,11 +2999,9 @@
 
           group.add(ribCage, cranium, nasal, jaw, light);
         } else {
-          // Default 'yurei': Grounded J-Horror Onryo (tattered burial kimono touching y = 0, hair veil & single bloodshot eye)
           const robe = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.42, 1.28, 16, 1, true), tatteredRobeMat);
           robe.position.y = 0.64;
 
-          // Tattered hem strips touching floor
           for (let t = 0; t < 10; t++) {
             const a = (t / 10) * Math.PI * 2;
             const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 0.45), tatteredRobeMat);
@@ -2778,7 +3010,6 @@
             group.add(strip);
           }
 
-          // Pale outstretched arms with dark claws
           [-0.22, 0.22].forEach((ax) => {
             const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.042, 0.54, 10), corpseSkinMat);
             arm.position.set(ax, 1.12, 0.24);
@@ -2793,9 +3024,8 @@
           const hairCrown = new THREE.Mesh(new THREE.SphereGeometry(0.19, 16, 16), darkHairMat);
           hairCrown.position.set(0, 1.48, -0.03);
 
-          // Long messy black hair curtains covering face, leaving one bloodshot eye peeking through
           for (let h = -4; h <= 4; h++) {
-            if (h === 1) continue; // Gap over right eye so bloodshot eye glares out!
+            if (h === 1) continue;
             const strand = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.72, 0.025), darkHairMat);
             strand.position.set(h * 0.038, 1.24, Math.abs(h) <= 2 ? 0.165 : 0.04);
             strand.rotation.z = h * 0.035;
@@ -2836,7 +3066,6 @@
         const ghostRig = this._buildJapaneseGhostMesh(spec.type);
         ghostRig.group.name = `Obake_${spec.type}_${motionType}_${idx}`;
 
-        // Snap strictly onto walkable floor at character's foot level with object-clearance guarantee
         const safePos = stageWorld
           ? stageWorld.findBestSafeFloorNear(targetPos.x, targetPos.z, refFootY, 3.2)
           : new THREE.Vector3(targetPos.x, refFootY, targetPos.z);
@@ -2848,6 +3077,8 @@
         ghostRig.group.visible = !this.stealthMode;
         this.spawnedGroup.add(ghostRig.group);
 
+        const pad = this._buildFootSpawnPad(safePos, this.triggerRadius);
+
         const gimmick = {
           id: `jp_ghost_${idx}`,
           kind: 'builtin',
@@ -2855,6 +3086,7 @@
           motionType: motionType || 'burst',
           name: spec.label,
           node: ghostRig.group,
+          pad,
           parts: ghostRig.parts,
           basePos: safePos.clone(),
           baseScale: new THREE.Vector3(1, 1, 1),
@@ -3020,7 +3252,6 @@
           const now = ctx.currentTime;
           const dur = 1.35;
 
-          // Master bus with eerie slapback echo reverb
           const master = ctx.createGain();
           master.gain.setValueAtTime(0.32, now);
           master.connect(ctx.destination);
@@ -3036,7 +3267,6 @@
           delay.connect(wetGain);
           wetGain.connect(master);
 
-          // 1. Vocal Formant Scream Synthesis ("Kyaaaahhh!!" / "Uwaaaahhh!!")
           const isDeepMonster = variant === 'skull' || variant === 'lantern';
           const isHighFemale = variant === 'yurei' || variant === 'rokurokubi';
 
@@ -3053,12 +3283,10 @@
           glottal1.frequency.exponentialRampToValueAtTime(peakPitch, now + 0.14);
           glottal1.frequency.exponentialRampToValueAtTime(endPitch, now + dur);
 
-          // Slight detuned second vocal cord for agonizing shriek beating
           glottal2.frequency.setValueAtTime(basePitch * 0.77, now);
           glottal2.frequency.exponentialRampToValueAtTime(peakPitch * 1.035, now + 0.14);
           glottal2.frequency.exponentialRampToValueAtTime(endPitch * 0.97, now + dur);
 
-          // Trembling vocal vibrato LFO
           const vibrato = ctx.createOscillator();
           const vibratoGain = ctx.createGain();
           vibrato.frequency.value = isHighFemale ? 16 : 11;
@@ -3067,7 +3295,6 @@
           vibratoGain.connect(glottal1.frequency);
           vibratoGain.connect(glottal2.frequency);
 
-          // Breathy rasp noise mixed into vocal tract
           const noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
           const nData = noiseBuf.getChannelData(0);
           for (let i = 0; i < nData.length; i++) {
@@ -3079,7 +3306,6 @@
           breathGain.gain.value = 0.42;
           breathNoise.connect(breathGain);
 
-          // Parallel Vocal Formant Filters (Open screaming mouth "AH / EE")
           const vocalSum = ctx.createGain();
           glottal1.connect(vocalSum);
           glottal2.connect(vocalSum);
@@ -3124,7 +3350,6 @@
           screamEnv.connect(master);
           screamEnv.connect(delay);
 
-          // 2. Dissonant Horror Strings Cluster + Sub-Bass Jump-Scare Thump
           [110, 116.54, 155.56].forEach((freq) => {
             const st = ctx.createOscillator();
             st.type = 'sawtooth';
@@ -3178,9 +3403,13 @@
         g.state = 'scare';
         g.stateTimer = 1.75;
 
-        // Reveal the hidden ghost suddenly at the exact moment of the jump scare
         if (g.node) {
           g.node.visible = true;
+        }
+        if (g.pad && g.pad.userData) {
+          g.pad.userData.ringMat.color.setHex(0xf43f5e);
+          g.pad.userData.discMat.color.setHex(0xe11d48);
+          g.pad.userData.ringMat.opacity = 0.9;
         }
 
         if (playerPos && g.basePos) {
@@ -3221,19 +3450,29 @@
             g.mixer.update(dt);
           }
 
-          const worldPos = new THREE.Vector3();
-          g.node.getWorldPosition(worldPos);
-          const dist = playerPos
-            ? Math.hypot(worldPos.x - playerPos.x, worldPos.z - playerPos.z)
-            : Infinity;
+          // Foot-level spawn point check:
+          // Must touch the foot spawn point horizontally AND be on the same floor elevation (not above head / different floor)
+          const spawnPt = g.basePos;
+          let horizDist = Infinity;
+          let vertDiff = Infinity;
+          if (playerPos && spawnPt) {
+            horizDist = Math.hypot(spawnPt.x - playerPos.x, spawnPt.z - playerPos.z);
+            vertDiff = Math.abs(spawnPt.y - playerPos.y);
+          }
+          const isTouchingFootPad = horizDist <= this.triggerRadius && vertDiff <= this.maxVerticalTouchDiff;
 
           if (g.state === 'idle') {
-            if (dist <= this.triggerRadius) {
+            if (isTouchingFootPad) {
               this._activateScare(g, onScareCallback, soundPlayedThisFrame, playerPos);
               soundPlayedThisFrame = true;
             } else {
-              // Stay completely hidden while lurking if stealthMode is enabled
               g.node.visible = !this.stealthMode;
+
+              if (g.pad && g.pad.userData && g.pad.visible) {
+                g.pad.userData.ringMat.color.setHex(0xa855f7);
+                g.pad.userData.discMat.color.setHex(0x7e22ce);
+                g.pad.userData.ringMat.opacity = 0.42 + Math.sin(this.time * 3.2 + g.phase) * 0.14;
+              }
 
               if (g.kind === 'builtin' && g.node.visible) {
                 const motion = g.motionType || 'burst';
@@ -3262,12 +3501,11 @@
             g.node.visible = true;
             g.stateTimer -= dt;
             const progress = 1 - Math.max(0, g.stateTimer / 1.75);
-            // Sudden pop-in snap scale during first 0.12s
             const popIn = Math.min(1.0, progress / 0.08);
 
-            if (playerPos && (g.motionType || 'burst') !== 'whirlwind') {
-              const dx = playerPos.x - worldPos.x;
-              const dz = playerPos.z - worldPos.z;
+            if (playerPos && (g.motionType || 'burst') !== 'whirlwind' && spawnPt) {
+              const dx = playerPos.x - spawnPt.x;
+              const dz = playerPos.z - spawnPt.z;
               g.node.rotation.y = Math.atan2(dx, dz);
             }
 
@@ -3316,7 +3554,6 @@
                 g.node.position.y = g.basePos.y;
                 g.node.scale.setScalar(popIn * (stepPhase % 2 === 1 ? 1.45 : 0.92));
               } else {
-                // Grounded sudden expansion + violent horror shiver
                 g.node.position.y = g.basePos.y;
                 g.node.position.x = g.basePos.x + tremble;
                 g.node.position.z = g.basePos.z + Math.cos(this.time * 48) * 0.05 * (1 - progress);
@@ -3351,7 +3588,7 @@
               }
             } else if (!g.scareAction) {
               const burst = Math.sin(progress * Math.PI);
-              g.node.position.y = g.basePos.y;
+              if (g.nodeOrigPos) g.node.position.copy(g.nodeOrigPos);
               g.node.scale.set(
                 g.baseScale.x * (1 + burst * 0.28),
                 g.baseScale.y * (1 + burst * 0.28),
@@ -3361,10 +3598,14 @@
 
             if (g.stateTimer <= 0) {
               g.state = 'cooldown';
-              g.stateTimer = 3.5;
-              g.node.position.copy(g.basePos);
-              if ((g.motionType || 'burst') === 'ceiling_drop') {
-                g.node.position.y = g.basePos.y + 2.35;
+              g.stateTimer = 3.0;
+              if (g.kind === 'builtin') {
+                g.node.position.copy(g.basePos);
+                if ((g.motionType || 'burst') === 'ceiling_drop') {
+                  g.node.position.y = g.basePos.y + 2.35;
+                }
+              } else if (g.nodeOrigPos) {
+                g.node.position.copy(g.nodeOrigPos);
               }
               g.node.rotation.x = 0;
               g.node.rotation.z = 0;
@@ -3384,13 +3625,18 @@
                 g.idleAction.reset().fadeIn(0.25).play();
               }
 
-              // Vanish back into darkness after scare finishes
+              if (g.pad && g.pad.userData) {
+                g.pad.userData.ringMat.color.setHex(0xa855f7);
+                g.pad.userData.discMat.color.setHex(0x7e22ce);
+                g.pad.userData.ringMat.opacity = 0.45;
+              }
               g.node.visible = !this.stealthMode;
             }
           } else if (g.state === 'cooldown') {
             g.stateTimer -= dt;
             g.node.visible = !this.stealthMode;
-            if (g.stateTimer <= 0 && dist > this.triggerRadius * 1.15) {
+            // Re-arm once timer expires AND character steps off the foot spawn pad (or climbs to another floor)
+            if (g.stateTimer <= 0 && (horizDist > this.triggerRadius * 1.15 || vertDiff > this.maxVerticalTouchDiff)) {
               g.state = 'idle';
             }
           }
@@ -3420,20 +3666,25 @@
         this.stageWorld = new StageWorld(this.scene);
         this.ghostSystem = new GhostGimmickSystem(this.scene);
 
+        // Customizable Initial Spawn Position & Yaw
+        this.initialSpawnPos = new THREE.Vector3(0, 0, 2.5);
+        this.initialSpawnYaw = Math.PI;
+        this.spawnClickPlacementMode = false;
+
         // Multi-character roster
         this.characters = [];
         this.activeCharIndex = 0;
         this.charCounter = 1;
 
         const initialChar = new CharacterEntity('char_1', '深紅の探索者', this.scene);
-        initialChar.root.position.set(0, 0, 2.5);
-        initialChar.root.rotation.y = Math.PI;
+        initialChar.root.position.copy(this.initialSpawnPos);
+        initialChar.root.rotation.y = this.initialSpawnYaw;
         this.characters.push(initialChar);
 
         // VMD / VPD Motion Library
         this.motions = [];
         this.motionCounter = 0;
-        this.motionTargetMode = 'active'; // 'active' | 'all'
+        this.motionTargetMode = 'active';
 
         // Controls & Camera State
         this.camYaw = 0;
@@ -3469,16 +3720,112 @@
           { id: 'twilight', icon: '🌆', label: '夕暮れ' },
           { id: 'night', icon: '🌙', label: '夜' }
         ];
-        this.lightingIdx = 0;
+        this.lightingIdx = 1;
+        this.stageWorld.setLightingMode('twilight');
+        document.getElementById('lighting-icon').textContent = '🌆';
+        document.getElementById('lighting-label').textContent = '夕暮れ';
+        this.isLoadingAsset = false;
 
         this.clock = new THREE.Clock();
         this._bindEvents();
+        this._syncSpawnUI();
         this._refreshAllUI();
         this._animate();
       }
 
       get activeCharacter() {
         return this.characters[this.activeCharIndex] || this.characters[0] || null;
+      }
+
+      _setLoadingOverlay(visible, title = '読み込み中...', subtitle = '') {
+        this.isLoadingAsset = visible;
+        const overlay = document.getElementById('loading-overlay');
+        if (!overlay) return;
+        if (visible) {
+          document.getElementById('loading-title').textContent = title;
+          document.getElementById('loading-subtitle').textContent = subtitle;
+          overlay.classList.remove('hidden');
+          overlay.classList.add('flex');
+        } else {
+          overlay.classList.add('hidden');
+          overlay.classList.remove('flex');
+        }
+      }
+
+      _promptSelectPMXEntries(pmxEntries) {
+        return new Promise((resolve) => {
+          const modal = document.getElementById('pmx-select-modal');
+          const list = document.getElementById('pmx-select-list');
+          const btnConfirm = document.getElementById('btn-pmx-select-confirm');
+          const btnCancel = document.getElementById('btn-pmx-select-cancel');
+          const btnClose = document.getElementById('btn-close-pmx-select');
+
+          if (!modal || !list) {
+            resolve([pmxEntries[0].file]);
+            return;
+          }
+
+          list.innerHTML = '';
+          pmxEntries.forEach((entry, idx) => {
+            const label = document.createElement('label');
+            label.className = 'flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800/90 border border-slate-700/70 cursor-pointer text-xs';
+            const sizeMb = (entry.file.size / (1024 * 1024)).toFixed(1);
+            label.innerHTML = `
+              <input type="checkbox" value="${idx}" ${idx === 0 ? 'checked' : ''} class="pmx-choice-chk accent-sky-400 w-4 h-4 rounded" />
+              <div class="min-w-0 flex-1">
+                <div class="font-semibold text-slate-100 truncate">${entry.file.name}</div>
+                <div class="text-[10px] text-slate-400 truncate">${entry.relPath} (${sizeMb} MB)</div>
+              </div>
+            `;
+            list.appendChild(label);
+          });
+
+          const cleanup = (resultFiles) => {
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+            btnConfirm.onclick = null;
+            btnCancel.onclick = null;
+            btnClose.onclick = null;
+            resolve(resultFiles);
+          };
+
+          btnConfirm.onclick = () => {
+            const checkedIndices = Array.from(list.querySelectorAll('.pmx-choice-chk:checked')).map((el) => parseInt(el.value, 10));
+            const chosen = checkedIndices.map((i) => pmxEntries[i]?.file).filter(Boolean);
+            cleanup(chosen.length > 0 ? chosen : [pmxEntries[0].file]);
+          };
+          btnCancel.onclick = () => cleanup([]);
+          btnClose.onclick = () => cleanup([]);
+
+          modal.classList.remove('hidden');
+          modal.classList.add('flex');
+        });
+      }
+
+      _syncSpawnUI() {
+        const p = this.initialSpawnPos;
+        const deg = Math.round(((this.initialSpawnYaw * 180) / Math.PI) % 360);
+        const normDeg = deg < 0 ? deg + 360 : deg;
+
+        const badge = document.getElementById('spawn-pos-badge');
+        if (badge) badge.textContent = `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`;
+
+        const ix = document.getElementById('input-spawn-x');
+        const iy = document.getElementById('input-spawn-y');
+        const iz = document.getElementById('input-spawn-z');
+        const iyaw = document.getElementById('input-spawn-yaw');
+        if (ix) ix.value = p.x.toFixed(2);
+        if (iy) iy.value = p.y.toFixed(2);
+        if (iz) iz.value = p.z.toFixed(2);
+        if (iyaw) iyaw.value = String(normDeg);
+      }
+
+      setInitialSpawnPoint(pos, yaw = null) {
+        this.initialSpawnPos.copy(pos);
+        if (typeof yaw === 'number' && isFinite(yaw)) {
+          this.initialSpawnYaw = yaw;
+        }
+        this._syncSpawnUI();
       }
 
       showToast(msg, tone = 'sky', duration = 2600) {
@@ -3540,7 +3887,6 @@
           this.renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        // Keyboard Shortcuts
         window.addEventListener('keydown', (e) => {
           if (e.target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
           this.keys[e.code] = true;
@@ -3576,7 +3922,6 @@
           this.keys[e.code] = false;
         });
 
-        // Orbit Camera Drag & Wheel Zoom
         const dom = this.renderer.domElement;
         dom.addEventListener('pointerdown', (e) => {
           if (e.button === 0) {
@@ -3601,7 +3946,6 @@
           this.camDist = Math.max(1.3, Math.min(10.0, this.camDist + e.deltaY * 0.0025));
         }, { passive: true });
 
-        // Touch D-Pad, Jump & Sprint
         document.querySelectorAll('#touch-dpad button[data-dir]').forEach((btn) => {
           const dir = btn.dataset.dir;
           btn.addEventListener('pointerdown', (e) => {
@@ -3619,7 +3963,6 @@
           e.currentTarget.textContent = `🏃 走り: ${this.touchSprint ? 'ON' : 'OFF'}`;
         });
 
-        // Top HUD Actions
         document.getElementById('btn-quick-next-char')?.addEventListener('click', () => this._cycleActiveCharacter());
         document.getElementById('btn-toggle-drawer')?.addEventListener('click', () => {
           document.getElementById('manager-drawer')?.classList.toggle('hidden');
@@ -3649,13 +3992,11 @@
           this.showToast(`ライティングを「${m.label}」に変更しました`);
         });
 
-        // Setup Modal
         const setupModal = document.getElementById('setup-modal');
         document.getElementById('btn-open-setup')?.addEventListener('click', () => setupModal?.classList.remove('hidden'));
         document.getElementById('btn-close-setup')?.addEventListener('click', () => setupModal?.classList.add('hidden'));
         document.getElementById('btn-start-studio')?.addEventListener('click', () => setupModal?.classList.add('hidden'));
 
-        // Drawer Tabs
         document.querySelectorAll('.drawer-tab').forEach((tabBtn) => {
           tabBtn.addEventListener('click', () => {
             const target = tabBtn.dataset.tab;
@@ -3668,11 +4009,11 @@
           });
         });
 
-        // Character & Motion File Inputs
-        const handleCharInput = (e) => {
-          if (e.target.files?.length) {
-            this._handleImportedPackage(FolderFileCollector.fromFileList(e.target.files));
-            e.target.value = '';
+        const handleCharInput = async (e) => {
+          const files = e.target.files ? Array.from(e.target.files) : [];
+          e.target.value = '';
+          if (files.length > 0) {
+            await this._handleImportedPackage(FolderFileCollector.fromFileList(files));
           }
         };
         document.getElementById('input-char-folder')?.addEventListener('change', handleCharInput);
@@ -3680,25 +4021,26 @@
         document.getElementById('quick-char-folder')?.addEventListener('change', handleCharInput);
         document.getElementById('quick-char-file')?.addEventListener('change', handleCharInput);
 
-        const handleMotionInput = (e) => {
-          if (e.target.files?.length) {
-            this._handleImportedPackage(FolderFileCollector.fromFileList(e.target.files));
-            e.target.value = '';
+        const handleMotionInput = async (e) => {
+          const files = e.target.files ? Array.from(e.target.files) : [];
+          e.target.value = '';
+          if (files.length > 0) {
+            await this._handleImportedPackage(FolderFileCollector.fromFileList(files));
           }
         };
         document.getElementById('input-motion-file')?.addEventListener('change', handleMotionInput);
         document.getElementById('quick-motion-file')?.addEventListener('change', handleMotionInput);
 
-        const handleStageInput = (e) => {
-          if (e.target.files?.length) {
-            this._handleImportedPackage(FolderFileCollector.fromFileList(e.target.files));
-            e.target.value = '';
+        const handleStageInput = async (e) => {
+          const files = e.target.files ? Array.from(e.target.files) : [];
+          e.target.value = '';
+          if (files.length > 0) {
+            await this._handleImportedPackage(FolderFileCollector.fromFileList(files));
           }
         };
         document.getElementById('input-stage-glb')?.addEventListener('change', handleStageInput);
         document.getElementById('quick-stage-file')?.addEventListener('change', handleStageInput);
 
-        // Global Drag & Drop Support
         const dropOverlay = document.getElementById('global-drop-overlay');
         window.addEventListener('dragover', (e) => {
           e.preventDefault();
@@ -3721,7 +4063,6 @@
           }
         });
 
-        // Character Batch Actions
         document.getElementById('btn-lineup-chars')?.addEventListener('click', () => {
           const active = this.activeCharacter;
           if (!active) return;
@@ -3745,7 +4086,6 @@
           this.showToast('全員のモーションを解除し歩行状態に戻しました');
         });
 
-        // Motion Batch Controls
         document.getElementById('target-mode-active')?.addEventListener('click', () => {
           this.motionTargetMode = 'active';
           document.getElementById('target-mode-active').className = 'px-2 py-0.5 rounded-md bg-sky-600 text-white font-semibold transition';
@@ -3773,13 +4113,13 @@
           this._refreshAllUI();
         });
 
-        // Stage Reset & Scale
         const resetToGarden = () => {
           this.stageWorld.buildDefaultGarden();
           this.ghostSystem.clearAll();
           document.getElementById('stage-status').textContent = '現在：標準テラス庭園';
           document.getElementById('drawer-stage-status').textContent = '現在：標準テラス庭園 (階段・橋・スロープ)';
           document.getElementById('hud-stage-name').textContent = '標準テラス庭園';
+          this.setInitialSpawnPoint(new THREE.Vector3(0, 0, 2.5), Math.PI);
           this._resetActiveCharacterPosition();
           this._updateGhostCountLabel();
           this.showToast('標準テラス庭園に戻しました');
@@ -3787,6 +4127,65 @@
         document.getElementById('btn-reset-stage')?.addEventListener('click', resetToGarden);
         document.getElementById('btn-drawer-reset-stage')?.addEventListener('click', resetToGarden);
         document.getElementById('btn-drawer-reset-pos')?.addEventListener('click', () => this._resetActiveCharacterPosition());
+
+        // Initial Spawn Position Controls
+        document.getElementById('btn-set-spawn-here')?.addEventListener('click', () => {
+          const active = this.activeCharacter;
+          if (!active) return;
+          this.setInitialSpawnPoint(active.root.position, active.root.rotation.y);
+          this.showToast(
+            `📍 初期位置を (${this.initialSpawnPos.x.toFixed(1)}, ${this.initialSpawnPos.y.toFixed(1)}, ${this.initialSpawnPos.z.toFixed(1)}) に保存しました！`,
+            'sky',
+            2400
+          );
+        });
+
+        document.getElementById('btn-apply-spawn-inputs')?.addEventListener('click', () => {
+          const x = parseFloat(document.getElementById('input-spawn-x')?.value ?? '0') || 0;
+          const y = parseFloat(document.getElementById('input-spawn-y')?.value ?? '0') || 0;
+          const z = parseFloat(document.getElementById('input-spawn-z')?.value ?? '2.5') || 0;
+          const deg = parseFloat(document.getElementById('input-spawn-yaw')?.value ?? '180') || 0;
+          const rad = (deg * Math.PI) / 180;
+          this.setInitialSpawnPoint(new THREE.Vector3(x, y, z), rad);
+          this._resetActiveCharacterPosition();
+        });
+
+        const toggleSpawnClickBtn = document.getElementById('btn-toggle-spawn-click');
+        const spawnClickBadge = document.getElementById('spawn-click-badge');
+        const setSpawnClickMode = (enabled) => {
+          this.spawnClickPlacementMode = enabled;
+          if (spawnClickBadge) {
+            spawnClickBadge.textContent = enabled ? 'ON' : 'OFF';
+            spawnClickBadge.className = enabled ? 'text-cyan-300 font-bold' : 'text-slate-400';
+          }
+          if (toggleSpawnClickBtn) {
+            if (enabled) {
+              toggleSpawnClickBtn.classList.add('bg-cyan-950/80', 'border-cyan-400');
+            } else {
+              toggleSpawnClickBtn.classList.remove('bg-cyan-950/80', 'border-cyan-400');
+            }
+          }
+          if (!enabled && !this.ghostClickPlacementMode) {
+            this.ghostSystem.setReticlePosition(null, false);
+          }
+        };
+
+        toggleSpawnClickBtn?.addEventListener('click', () => {
+          const next = !this.spawnClickPlacementMode;
+          if (next && this.ghostClickPlacementMode) {
+            this.ghostClickPlacementMode = false;
+            const gb = document.getElementById('click-place-badge');
+            if (gb) {
+              gb.textContent = 'OFF';
+              gb.className = 'text-slate-400';
+            }
+            document.getElementById('btn-toggle-click-place')?.classList.remove('bg-emerald-950/80', 'border-emerald-400');
+          }
+          setSpawnClickMode(next);
+          if (next) {
+            this.showToast('🎯 初期位置の地面クリック指定モード ON！床をクリックしてスタート地点を設定できます', 'sky', 3200);
+          }
+        });
 
         const syncStageScale = (val) => {
           const s = parseFloat(val) || 1.0;
@@ -3800,23 +4199,22 @@
         document.getElementById('stage-scale-slider')?.addEventListener('input', (e) => syncStageScale(e.target.value));
         document.getElementById('drawer-stage-scale')?.addEventListener('input', (e) => syncStageScale(e.target.value));
 
-        // Built-in Japanese Haunted House Stage Generator
         const buildHauntedHouse = () => {
           this.stageWorld.buildHauntedHouseStage();
           this.ghostSystem.clearAll();
           document.getElementById('stage-status').textContent = '現在：和風お化け屋敷 (内蔵ステージ)';
           document.getElementById('drawer-stage-status').textContent = '現在：和風お化け屋敷 (障子・鳥居・お札・廊下)';
           document.getElementById('hud-stage-name').textContent = '和風お化け屋敷';
-          this._snapAllCharactersToGround();
+          this.setInitialSpawnPoint(new THREE.Vector3(0, 0, 7.2), Math.PI);
+          this._resetActiveCharacterPosition();
           const refFootY = this.activeCharacter ? this.activeCharacter.root.position.y : 0;
           this.ghostSystem.spawnJapaneseGhosts(7, this.stageWorld, refFootY);
           this._updateGhostCountLabel();
-          this.showToast('🏯 和風お化け屋敷を生成し、曲がり角の床面に7種の妖怪を配置しました！', 'violet', 3200);
+          this.showToast('🏯 和風お化け屋敷を生成し、足元出現ポイントに7種の妖怪を設置しました！', 'violet', 3200);
         };
         document.getElementById('btn-build-haunted-stage')?.addEventListener('click', buildHauntedHouse);
         document.getElementById('btn-build-haunted-stage-main')?.addEventListener('click', buildHauntedHouse);
 
-        // Custom Ghost Variant + Motion Preset + 3D Click Placement
         document.querySelectorAll('.ghost-variant-opt').forEach((btn) => {
           btn.addEventListener('click', () => {
             this.selectedGhostVariant = btn.dataset.variant || 'lantern';
@@ -3840,7 +4238,7 @@
           );
           this._updateGhostCountLabel();
           const motionLabel = GhostGimmickSystem.MOTION_PRESETS.find((m) => m.id === motionType)?.label || motionType;
-          this.showToast(`👻 「${g.name}」を【${motionLabel}】で配置しました！`, 'violet', 2400);
+          this.showToast(`👻 「${g.name}」の足元ポイントを【${motionLabel}】で設置しました！`, 'violet', 2400);
         };
 
         document.getElementById('btn-spawn-in-front')?.addEventListener('click', () => {
@@ -3849,7 +4247,7 @@
           if (active) {
             const yaw = active.root.rotation.y;
             spawnPos.copy(active.root.position).add(
-              new THREE.Vector3(Math.sin(yaw) * 2.2, 0, Math.cos(yaw) * 2.2)
+              new THREE.Vector3(Math.sin(yaw) * 2.5, 0, Math.cos(yaw) * 2.5)
             );
           }
           spawnCustomGhostAt(spawnPos);
@@ -3859,17 +4257,20 @@
         const clickPlaceBadge = document.getElementById('click-place-badge');
         toggleClickPlaceBtn?.addEventListener('click', () => {
           this.ghostClickPlacementMode = !this.ghostClickPlacementMode;
+          if (this.ghostClickPlacementMode && this.spawnClickPlacementMode) {
+            setSpawnClickMode(false);
+          }
           if (clickPlaceBadge) {
             clickPlaceBadge.textContent = this.ghostClickPlacementMode ? 'ON' : 'OFF';
             clickPlaceBadge.className = this.ghostClickPlacementMode ? 'text-emerald-300 font-bold' : 'text-slate-400';
           }
           if (this.ghostClickPlacementMode) {
             toggleClickPlaceBtn.classList.add('bg-emerald-950/80', 'border-emerald-400');
-            this.showToast('🎯 3D地面クリック配置モード ON！床や畳をクリックすると好きな場所に配置できます', 'emerald', 3200);
+            this.showToast('🎯 床クリック設置モード ON！足元にお化け出現ポイントを設置できます', 'emerald', 3200);
           } else {
             toggleClickPlaceBtn.classList.remove('bg-emerald-950/80', 'border-emerald-400');
             this.ghostSystem.setReticlePosition(null, false);
-            this.showToast('地面クリック配置モードを OFF にしました', 'sky', 1800);
+            this.showToast('床クリック設置モードを OFF にしました', 'sky', 1800);
           }
         });
 
@@ -3897,7 +4298,7 @@
         };
 
         dom.addEventListener('pointermove', (e) => {
-          if (!this.ghostClickPlacementMode) return;
+          if (!this.ghostClickPlacementMode && !this.spawnClickPlacementMode) return;
           const pt = raycastStageFloor(e.clientX, e.clientY);
           this.ghostSystem.setReticlePosition(pt, Boolean(pt));
         });
@@ -3909,12 +4310,20 @@
         });
 
         dom.addEventListener('pointerup', (e) => {
-          if (!this.ghostClickPlacementMode || e.button !== 0 || !downScreenPos) return;
+          if ((!this.ghostClickPlacementMode && !this.spawnClickPlacementMode) || e.button !== 0 || !downScreenPos) return;
           const moveDist = Math.hypot(e.clientX - downScreenPos.x, e.clientY - downScreenPos.y);
           downScreenPos = null;
           if (moveDist < 6) {
             const pt = raycastStageFloor(e.clientX, e.clientY);
-            if (pt) spawnCustomGhostAt(pt);
+            if (pt) {
+              if (this.spawnClickPlacementMode) {
+                this.setInitialSpawnPoint(pt);
+                this._resetActiveCharacterPosition();
+                setSpawnClickMode(false);
+              } else {
+                spawnCustomGhostAt(pt);
+              }
+            }
           }
         });
 
@@ -3922,26 +4331,30 @@
           const refFootY = this.activeCharacter ? this.activeCharacter.root.position.y : 0;
           const placed = this.ghostSystem.spawnJapaneseGhosts(7, this.stageWorld, refFootY);
           this._updateGhostCountLabel();
-          this.showToast(`👻 曲がり角や通路の安全な床面に ${placed}体 の妖怪を配置しました！`, 'violet');
+          this.showToast(`👻 曲がり角や通路の足元ポイントに ${placed}体 の妖怪を設置しました！`, 'violet');
         });
 
         document.getElementById('btn-spawn-ghosts-12')?.addEventListener('click', () => {
           const refFootY = this.activeCharacter ? this.activeCharacter.root.position.y : 0;
           const placed = this.ghostSystem.spawnJapaneseGhosts(12, this.stageWorld, refFootY);
           this._updateGhostCountLabel();
-          this.showToast(`👻👻 曲がり角や通路の安全な床面に ${placed}体 の妖怪を配置しました！`, 'violet');
+          this.showToast(`👻👻 曲がり角や通路の足元ポイントに ${placed}体 の妖怪を設置しました！`, 'violet');
         });
 
         document.getElementById('btn-clear-spawned-ghosts')?.addEventListener('click', () => {
           this.ghostSystem.clearSpawnedGhosts();
           this._updateGhostCountLabel();
-          this.showToast('配置した和風おばけを解除しました', 'sky');
+          this.showToast('設置した和風おばけを解除しました', 'sky');
         });
 
         document.getElementById('ghost-trigger-radius')?.addEventListener('input', (e) => {
-          const r = parseFloat(e.target.value) || 3.5;
-          this.ghostSystem.triggerRadius = r;
+          const r = parseFloat(e.target.value) || 1.8;
           document.getElementById('ghost-radius-val').textContent = `${r.toFixed(1)}m`;
+          this.ghostSystem.setTriggerRadius(r);
+        });
+
+        document.getElementById('chk-ghost-show-pads')?.addEventListener('change', (e) => {
+          this.ghostSystem.setShowSpawnPads(Boolean(e.target.checked));
         });
 
         document.getElementById('chk-ghost-stealth')?.addEventListener('change', (e) => {
@@ -3949,8 +4362,8 @@
           this.ghostSystem.setStealthMode(stealth);
           this.showToast(
             stealth
-              ? '👻 ステルス潜伏ON：お化けは脅かす瞬間だけ姿を現します'
-              : '👁️ 常時表示ON：配置場所を確認できます',
+              ? '👻 ステルス潜伏ON：足元ポイントに触れた瞬間だけお化けが出現します'
+              : '👁️ 常時表示ON：お化けの本体を常時表示します',
             'violet',
             2200
           );
@@ -3968,33 +4381,46 @@
           }
           this.ghostSystem._playJapaneseScareSound('yurei');
           this.ghostSystem.triggerAllNow((g) => this._onCharacterScaredByGhost(g));
+          this.showToast('⚡ 全妖怪ギミックを一斉に発動しました！', 'rose');
         });
 
         document.getElementById('btn-export-haunted-glb')?.addEventListener('click', () => {
-          this.exportHauntedHouseGLB();
+          this._exportHauntedHouseGLB();
         });
 
         // Lip-Sync Controls
-        const lipPanel = document.getElementById('lipsync-panel');
-        document.getElementById('btn-lipsync-toggle')?.addEventListener('click', () => lipPanel?.classList.toggle('hidden'));
-        document.getElementById('btn-close-lipsync')?.addEventListener('click', () => lipPanel?.classList.add('hidden'));
+        document.getElementById('btn-lipsync-toggle')?.addEventListener('click', () => {
+          document.getElementById('lipsync-panel')?.classList.toggle('hidden');
+        });
+        document.getElementById('btn-close-lipsync')?.addEventListener('click', () => {
+          document.getElementById('lipsync-panel')?.classList.add('hidden');
+        });
 
         this.lipSync.onStateChange = (mode, label) => {
           const badge = document.getElementById('lipsync-badge');
+          const micBtnLabel = document.getElementById('mic-btn-label');
           if (badge) {
             badge.textContent = label;
-            badge.className = mode !== 'idle'
-              ? 'text-[11px] px-1.5 py-0.5 rounded bg-pink-500/30 text-pink-200 font-bold'
-              : 'text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300';
+            badge.className =
+              mode === 'idle'
+                ? 'text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300'
+                : 'text-[11px] px-1.5 py-0.5 rounded bg-pink-600 text-white font-bold';
+          }
+          if (micBtnLabel) {
+            micBtnLabel.textContent = mode === 'mic' ? 'マイク入力を停止' : 'マイク入力を開始';
           }
         };
 
         document.getElementById('btn-mic-toggle')?.addEventListener('click', async () => {
-          try {
-            await this.lipSync.startMicrophone();
-            this.showToast('🎤 マイク音声リップシンクを開始しました！', 'pink');
-          } catch (_) {
-            this.showToast('マイクの許可が得られませんでした。テスト発話をお試しください', 'rose');
+          if (this.lipSync.mode === 'mic') {
+            this.lipSync.stop();
+          } else {
+            try {
+              await this.lipSync.startMicrophone();
+              this.showToast('🎤 マイク音声リップシンクを開始しました', 'pink');
+            } catch (_) {
+              this.showToast('マイクへのアクセスが許可されませんでした', 'rose');
+            }
           }
         });
 
@@ -4003,352 +4429,79 @@
           this.showToast('リップシンクを停止しました');
         });
 
-        document.getElementById('btn-test-speech')?.addEventListener('click', () => {
-          this.lipSync.startSynthDemo();
-          this.showToast('🗣️ テスト発話 (あいうえお) を再生中！', 'pink');
-        });
-
-        const audioPlayer = document.getElementById('lipsync-audio-player');
         document.getElementById('input-audio-file')?.addEventListener('change', (e) => {
           const file = e.target.files?.[0];
-          if (!file || !audioPlayer) return;
-          audioPlayer.src = URL.createObjectURL(file);
-          audioPlayer.classList.remove('hidden');
-          this.lipSync.attachAudioElement(audioPlayer);
-          audioPlayer.play().catch(() => {});
-          e.target.value = '';
+          if (!file) return;
+          const player = document.getElementById('lipsync-audio-player');
+          if (player) {
+            player.src = URL.createObjectURL(file);
+            player.classList.remove('hidden');
+            this.lipSync.attachAudioElement(player);
+            player.play().catch(() => {});
+            this.showToast(`🎵 音声「${file.name}」でリップシンク再生中`, 'pink');
+          }
+        });
+
+        document.getElementById('btn-test-speech')?.addEventListener('click', () => {
+          this.lipSync.startSynthDemo();
+          this.showToast('🗣️ テスト発話「あ・い・う・え・お」を再生中', 'pink');
         });
       }
 
-      async _handleImportedPackage({ pmxFiles, motionFiles, stageFiles, fileMap }) {
-        // 1. Load Environment GLB if present
-        if (stageFiles.length > 0) {
-          const stFile = stageFiles[0];
-          try {
-            const info = await this.stageWorld.loadGLB(stFile);
-            const embeddedCount = this.ghostSystem.scanGLBForTriggers(info.gltfScene, info.animations);
-            this._resetActiveCharacterPosition();
-            this._updateGhostCountLabel();
+      async _exportHauntedHouseGLB() {
+        try {
+          this.showToast('📦 お化け屋敷GLBデータを生成中...', 'sky', 2200);
+          const exportRoot = new THREE.Group();
+          exportRoot.name = 'HauntedHouse_ExportScene';
 
-            document.getElementById('stage-status').textContent = `現在：${this.stageWorld.stageName} (${info.meshCount}メッシュ)`;
-            document.getElementById('drawer-stage-status').textContent = `現在：${this.stageWorld.stageName} (ギミック:${embeddedCount}個)`;
-            document.getElementById('hud-stage-name').textContent = this.stageWorld.stageName;
-            this.showToast(`🏛️ 環境GLB「${this.stageWorld.stageName}」を読み込みました！`, 'emerald');
-          } catch (err) {
-            console.error(err);
-            this.showToast('環境GLBの読み込みに失敗しました', 'rose');
-          }
-        }
+          const stageClone = this.stageWorld.stageGroup.clone(true);
+          exportRoot.add(stageClone);
 
-        // 2. Load PMX / PMD Characters
-        for (const pmxFile of pmxFiles) {
-          const cleanName = pmxFile.name.replace(/\.(pmx|pmd)$/i, '');
-          const id = `char_${++this.charCounter}`;
-          const entity = new CharacterEntity(id, cleanName, this.scene);
-          try {
-            await entity.loadPMXFromFile(pmxFile, fileMap);
-            const active = this.activeCharacter;
-            const offset = this.characters.length * 1.1;
-            entity.root.position.set(
-              (active ? active.root.position.x : 0) + offset,
-              0,
-              active ? active.root.position.z : 2.5
-            );
-            this.characters.push(entity);
-            this.activeCharIndex = this.characters.length - 1;
-            this._snapAllCharactersToGround();
-            this.showToast(`👤 キャラクター「${cleanName}」を追加しました！`, 'sky');
-          } catch (err) {
-            console.error(err);
-            this.scene.remove(entity.root);
-            this.showToast(`「${pmxFile.name}」の読込に失敗しました`, 'rose');
-          }
-        }
-
-        // 3. Register VMD / VPD Motions
-        for (const mFile of motionFiles) {
-          const isVpd = mFile.name.toLowerCase().endsWith('.vpd');
-          const cleanName = mFile.name.replace(/\.(vmd|vpd)$/i, '');
-          this.motions.push({
-            id: `mot_${++this.motionCounter}`,
-            name: cleanName,
-            type: isVpd ? 'vpd' : 'vmd',
-            file: mFile
+          const prevVisibility = this.ghostSystem.gimmicks.map((g) => g.node.visible);
+          this.ghostSystem.gimmicks.forEach((g) => {
+            g.node.visible = true;
           });
+          const ghostsClone = this.ghostSystem.spawnedGroup.clone(true);
+          exportRoot.add(ghostsClone);
+          this.ghostSystem.gimmicks.forEach((g, idx) => {
+            g.node.visible = prevVisibility[idx];
+          });
+
+          const animations = this.ghostSystem.buildExportableAnimations();
+          const exporter = new GLTFExporter();
+          const glbBuffer = await new Promise((resolve, reject) => {
+            exporter.parse(
+              exportRoot,
+              (result) => resolve(result),
+              (err) => reject(err),
+              { binary: true, animations }
+            );
+          });
+
+          const blob = new Blob([glbBuffer], { type: 'model/gltf-binary' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          const ghostCount = this.ghostSystem.gimmicks.length;
+          a.download = `haunted_house_${ghostCount}ghosts.glb`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+          this.showToast(`✅ 「haunted_house_${ghostCount}ghosts.glb」を書き出しました！`, 'emerald', 3200);
+        } catch (err) {
+          console.error(err);
+          this.showToast('GLB出力中にエラーが発生しました', 'rose');
         }
-        if (motionFiles.length > 0) {
-          this.showToast(`🎞️ ${motionFiles.length}件のモーション/ポーズを追加しました！`, 'violet');
-        }
-
-        this._refreshAllUI();
-      }
-
-      async _triggerMotion(motionEntry) {
-        const targets = this.motionTargetMode === 'all' ? this.characters : [this.activeCharacter].filter(Boolean);
-        for (const ch of targets) {
-          try {
-            await ch.applyMotion(motionEntry);
-          } catch (err) {
-            console.error(err);
-          }
-        }
-        this._refreshAllUI();
-        this.showToast(`▶ 「${motionEntry.name}」を再生しました`, 'violet', 1800);
-      }
-
-      _cycleActiveCharacter() {
-        if (this.characters.length <= 1) {
-          this.showToast('他のキャラクターを追加すると Tab で乗り移りできます');
-          return;
-        }
-        this.activeCharIndex = (this.activeCharIndex + 1) % this.characters.length;
-        this._updateFirstPersonVisibility();
-        this._updateFlashlightVisibility();
-        if (this.firstPersonMode && this.activeCharacter) {
-          this.camYaw = this.activeCharacter.root.rotation.y + Math.PI;
-          this.camPitch = 0.04;
-        }
-        this._refreshAllUI();
-        this.showToast(`🎮 操作キャラを「${this.activeCharacter.name}」に切り替えました`);
-      }
-
-      _toggleFirstPerson() {
-        this.firstPersonMode = !this.firstPersonMode;
-        const active = this.activeCharacter;
-        if (this.firstPersonMode && active) {
-          this.camYaw = active.root.rotation.y + Math.PI;
-          this.camPitch = 0.04;
-        } else {
-          this.camPitch = Math.max(-0.15, Math.min(0.95, this.camPitch));
-        }
-
-        this._updateFirstPersonVisibility();
-        this._updateFlashlightVisibility();
-
-        const btn = document.getElementById('btn-first-person');
-        const label = document.getElementById('fpv-label');
-        if (label) {
-          label.textContent = this.firstPersonMode ? '三人称' : '一人称';
-        }
-        if (btn) {
-          if (this.firstPersonMode) {
-            btn.classList.add('bg-cyan-950/80', 'border-cyan-400', 'text-cyan-100');
-          } else {
-            btn.classList.remove('bg-cyan-950/80', 'border-cyan-400', 'text-cyan-100');
-          }
-        }
-
-        this._renderHotkeyQuickbar();
-        this.showToast(
-          this.firstPersonMode
-            ? '👁️ 一人称視点（FPSモード）に切り替えました（ドラッグで周囲を見渡せます）'
-            : '🎥 三人称視点に戻しました',
-          'sky',
-          2200
-        );
-      }
-
-      _updateFirstPersonVisibility() {
-        this.characters.forEach((ch, idx) => {
-          ch.setFirstPersonHidden(this.firstPersonMode && idx === this.activeCharIndex);
-        });
-      }
-
-      _toggleAutoWalk() {
-        this.autoWalkEnabled = !this.autoWalkEnabled;
-        const badge = document.getElementById('autowalk-state');
-        if (badge) {
-          badge.textContent = this.autoWalkEnabled ? 'ON' : 'OFF';
-          badge.className = this.autoWalkEnabled
-            ? 'text-[11px] px-1.5 py-0.5 rounded bg-emerald-500/30 text-emerald-200 font-bold'
-            : 'text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-bold';
-        }
-        this._renderHotkeyQuickbar();
-        this.showToast(`🚶 IK自動歩行モード: ${this.autoWalkEnabled ? 'ON' : 'OFF'}`, 'emerald', 1800);
-      }
-
-      _toggleUI() {
-        this.uiHidden = !this.uiHidden;
-        const uiLayer = document.getElementById('ui-layer');
-        if (uiLayer) {
-          uiLayer.style.opacity = this.uiHidden ? '0' : '1';
-          uiLayer.style.pointerEvents = this.uiHidden ? 'none' : 'auto';
-        }
-        if (this.uiHidden) {
-          this.showToast('UIを非表示にしました（テンキー 0 で再表示）', 'sky', 1800);
-        }
-      }
-
-      _refreshAllUI() {
-        const active = this.activeCharacter;
-        if (active) {
-          document.getElementById('hud-active-char').textContent = active.name;
-          const statusMap = {
-            walk: '状態: 歩行/待機',
-            vmd_playing: `再生中: ${active.currentMotionName}`,
-            vmd_paused: `一時停止: ${active.currentMotionName}`,
-            vpd_pose: `ポーズ: ${active.currentMotionName}`
-          };
-          document.getElementById('hud-active-motion').textContent = statusMap[active.motionState] || '状態: 歩行/待機';
-        }
-
-        document.getElementById('badge-counts').textContent = `${this.characters.length}体 / ${this.motions.length}件`;
-        document.getElementById('tab-char-count').textContent = String(this.characters.length);
-        document.getElementById('tab-motion-count').textContent = String(this.motions.length);
-        document.getElementById('modal-char-status').textContent = `登録済: ${this.characters.length}体`;
-        document.getElementById('modal-motion-status').textContent = `登録済: ${this.motions.length}件`;
-
-        this._renderCharacterList();
-        this._renderMotionList();
-        this._renderHotkeyQuickbar();
-        this._updateGhostCountLabel();
-      }
-
-      _renderCharacterList() {
-        const list = document.getElementById('character-list');
-        if (!list) return;
-        list.innerHTML = '';
-
-        this.characters.forEach((ch, idx) => {
-          const isCurrent = idx === this.activeCharIndex;
-          const card = document.createElement('div');
-          card.className = `p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
-            isCurrent ? 'bg-sky-950/60 border-sky-400/50' : 'bg-slate-900/75 border-slate-700/60'
-          }`;
-
-          const info = document.createElement('div');
-          info.className = 'min-w-0 flex-1';
-          info.innerHTML = `
-            <div class="font-bold text-slate-100 truncate">${isCurrent ? '🎮 ' : ''}${ch.name}</div>
-            <div class="text-[10px] text-slate-400 mt-0.5">
-              ${ch.hasFootAndToeIK ? 'IK歩行対応' : '標準ボーン'} ・ ${ch.motionState === 'walk' ? '歩行/待機' : ch.currentMotionName}
-            </div>
-          `;
-          card.appendChild(info);
-
-          const btns = document.createElement('div');
-          btns.className = 'flex items-center gap-1 shrink-0';
-
-          if (!isCurrent) {
-            const ctrlBtn = document.createElement('button');
-            ctrlBtn.className = 'px-2 py-1 rounded-lg bg-sky-700 hover:bg-sky-600 text-white text-[11px] font-semibold';
-            ctrlBtn.textContent = '操作';
-            ctrlBtn.addEventListener('click', () => {
-              this.activeCharIndex = idx;
-              this._updateFirstPersonVisibility();
-              this._updateFlashlightVisibility();
-              if (this.firstPersonMode && this.activeCharacter) {
-                this.camYaw = this.activeCharacter.root.rotation.y + Math.PI;
-                this.camPitch = 0.04;
-              }
-              this._refreshAllUI();
-            });
-            btns.appendChild(ctrlBtn);
-          }
-
-          if (this.characters.length > 1) {
-            const delBtn = document.createElement('button');
-            delBtn.className = 'px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-900/80 text-rose-300 text-[11px]';
-            delBtn.textContent = '✕';
-            delBtn.addEventListener('click', () => {
-              this.scene.remove(ch.root);
-              this.characters.splice(idx, 1);
-              this.activeCharIndex = Math.min(this.activeCharIndex, this.characters.length - 1);
-              this._updateFirstPersonVisibility();
-              this._updateFlashlightVisibility();
-              this._refreshAllUI();
-            });
-            btns.appendChild(delBtn);
-          }
-
-          card.appendChild(btns);
-          list.appendChild(card);
-        });
-      }
-
-      _renderMotionList() {
-        const list = document.getElementById('motion-list');
-        if (!list) return;
-        if (this.motions.length === 0) {
-          list.innerHTML = `
-            <div class="text-center text-slate-500 text-xs py-6 bg-slate-950/40 rounded-xl border border-slate-800">
-              VMDモーションやVPDポーズを追加するとここに一覧表示されます
-            </div>
-          `;
-          return;
-        }
-
-        list.innerHTML = '';
-        this.motions.forEach((mot, idx) => {
-          const row = document.createElement('div');
-          row.className = 'p-2.5 rounded-xl bg-slate-900/75 border border-slate-700/60 flex items-center justify-between gap-2 text-xs';
-          const hotkeyBadge = idx < 8 ? `<span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-[10px]">[${idx + 1}]</span>` : '';
-          row.innerHTML = `
-            <div class="min-w-0 flex-1">
-              <div class="font-semibold text-slate-100 truncate">${hotkeyBadge} ${mot.name}</div>
-              <div class="text-[10px] text-slate-400 uppercase">${mot.type}</div>
-            </div>
-          `;
-
-          const playBtn = document.createElement('button');
-          playBtn.className = 'px-2.5 py-1 rounded-lg bg-violet-700 hover:bg-violet-600 text-white font-semibold text-[11px] shrink-0';
-          playBtn.textContent = mot.type === 'vpd' ? 'ポーズ適用' : '▶ 再生';
-          playBtn.addEventListener('click', () => this._triggerMotion(mot));
-          row.appendChild(playBtn);
-
-          list.appendChild(row);
-        });
-      }
-
-      _renderHotkeyQuickbar() {
-        const bar = document.getElementById('hotkey-quickbar');
-        if (!bar) return;
-        bar.innerHTML = '';
-
-        for (let i = 0; i < 8; i++) {
-          const mot = this.motions[i];
-          const btn = document.createElement('button');
-          btn.className = mot
-            ? 'px-2.5 py-1 rounded-xl bg-violet-950/75 hover:bg-violet-800/80 text-violet-100 border border-violet-500/35 text-[11px] font-medium whitespace-nowrap transition'
-            : 'px-2 py-1 rounded-xl bg-slate-900/60 text-slate-500 border border-slate-800 text-[11px] whitespace-nowrap';
-          btn.textContent = mot ? `[${i + 1}] ${mot.name.slice(0, 8)}` : `[${i + 1}] 空`;
-          if (mot) {
-            btn.addEventListener('click', () => this._triggerMotion(mot));
-          }
-          bar.appendChild(btn);
-        }
-
-        const walkBtn = document.createElement('button');
-        walkBtn.className = this.autoWalkEnabled
-          ? 'px-2.5 py-1 rounded-xl bg-emerald-800/80 text-emerald-100 border border-emerald-400/50 text-[11px] font-bold whitespace-nowrap'
-          : 'px-2.5 py-1 rounded-xl bg-slate-800 text-slate-300 border border-slate-600/50 text-[11px] whitespace-nowrap';
-        walkBtn.textContent = `[9] 自動歩行:${this.autoWalkEnabled ? 'ON' : 'OFF'}`;
-        walkBtn.addEventListener('click', () => this._toggleAutoWalk());
-        bar.appendChild(walkBtn);
-
-        const fpvBtn = document.createElement('button');
-        fpvBtn.className = this.firstPersonMode
-          ? 'px-2.5 py-1 rounded-xl bg-cyan-800/85 text-cyan-100 border border-cyan-400/55 text-[11px] font-bold whitespace-nowrap'
-          : 'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-200 border border-slate-600/50 text-[11px] whitespace-nowrap';
-        fpvBtn.textContent = this.firstPersonMode ? '[V] 三人称へ' : '[V] 一人称';
-        fpvBtn.addEventListener('click', () => this._toggleFirstPerson());
-        bar.appendChild(fpvBtn);
-
-        const hideBtn = document.createElement('button');
-        hideBtn.className = 'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600/50 text-[11px] whitespace-nowrap';
-        hideBtn.textContent = '[0] UI切替';
-        hideBtn.addEventListener('click', () => this._toggleUI());
-        bar.appendChild(hideBtn);
       }
 
       _updateGhostCountLabel() {
         const count = this.ghostSystem.gimmicks.length;
-        const el = document.getElementById('ghost-gimmick-count');
-        if (el) el.textContent = `${count}体稼働中`;
-
+        const badge = document.getElementById('ghost-gimmick-count');
+        if (badge) badge.textContent = `${count}体稼働中`;
         const expBadge = document.getElementById('export-summary-badge');
         if (expBadge) expBadge.textContent = `ステージ + ${count}体`;
-
         this._renderPlacedGhostList();
       }
 
@@ -4356,11 +4509,10 @@
         const listEl = document.getElementById('placed-ghost-list');
         if (!listEl) return;
 
-        const items = this.ghostSystem.gimmicks;
-        if (items.length === 0) {
+        if (this.ghostSystem.gimmicks.length === 0) {
           listEl.innerHTML = `
             <div class="text-[10px] text-slate-500 text-center py-2 bg-slate-950/50 rounded-lg border border-slate-800/80">
-              まだ配置されていません（地面クリックまたは「目の前に配置」で追加）
+              まだ設置されていません（床クリックまたは「目の前の床に設置」で追加）
             </div>
           `;
           return;
@@ -4369,307 +4521,629 @@
         const presets = GhostGimmickSystem.MOTION_PRESETS;
         listEl.innerHTML = '';
 
-        items.forEach((g, idx) => {
+        this.ghostSystem.gimmicks.forEach((g, idx) => {
           const row = document.createElement('div');
-          row.className = 'flex items-center justify-between gap-1 bg-slate-950/75 border border-slate-800 rounded-lg px-2 py-1.5 text-[10px]';
-
-          const posText = g.basePos ? `(${g.basePos.x.toFixed(1)}, ${g.basePos.z.toFixed(1)})` : '';
+          row.className = 'rounded-lg bg-slate-950/85 border border-purple-500/25 p-1.5 flex flex-col gap-1 text-[10px]';
           const shortName = g.name.split(' (')[0];
+          const optionsHtml = presets
+            .map((p) => `<option value="${p.id}" ${g.motionType === p.id ? 'selected' : ''}>${p.label}</option>`)
+            .join('');
 
-          const left = document.createElement('div');
-          left.className = 'min-w-0 flex-1';
-          left.innerHTML = `
-            <div class="font-semibold text-purple-200 truncate">#${idx + 1} ${shortName}</div>
-            <div class="text-[9px] text-slate-400 font-mono">${posText}</div>
+          row.innerHTML = `
+            <div class="flex items-center justify-between gap-1">
+              <span class="font-semibold text-purple-200 truncate">#${idx + 1} ${shortName}</span>
+              <span class="text-[9px] text-slate-400 font-mono">(${g.basePos.x.toFixed(1)}, ${g.basePos.y.toFixed(1)}, ${g.basePos.z.toFixed(1)})</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <select data-gid="${g.id}" class="ghost-item-motion-sel flex-1 rounded bg-slate-900 border border-slate-700 text-slate-200 px-1.5 py-0.5 text-[10px] focus:outline-none focus:border-purple-400">
+                ${optionsHtml}
+              </select>
+              <button data-gid="${g.id}" class="ghost-item-test-btn px-1.5 py-0.5 rounded bg-rose-950/80 hover:bg-rose-800/80 text-rose-200 border border-rose-500/35" title="このオバケだけテスト発動">⚡</button>
+              <button data-gid="${g.id}" class="ghost-item-tp-btn px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-sky-200 border border-slate-600/50" title="このオバケの近くへ移動">📍</button>
+              <button data-gid="${g.id}" class="ghost-item-del-btn px-1.5 py-0.5 rounded bg-slate-900 hover:bg-rose-950 text-slate-400 hover:text-rose-300 border border-slate-700" title="削除">✕</button>
+            </div>
           `;
-          row.appendChild(left);
-
-          if (g.kind === 'builtin') {
-            const sel = document.createElement('select');
-            sel.className = 'bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[10px] text-slate-200 max-w-[115px]';
-            presets.forEach((p) => {
-              const opt = document.createElement('option');
-              opt.value = p.id;
-              opt.textContent = p.label;
-              if ((g.motionType || 'burst') === p.id) opt.selected = true;
-              sel.appendChild(opt);
-            });
-            sel.addEventListener('change', () => {
-              this.ghostSystem.setGimmickMotion(g.id, sel.value);
-              this.showToast(`#${idx + 1} ${shortName} のモーションを変更しました`, 'violet', 1800);
-            });
-            row.appendChild(sel);
-          }
-
-          const actions = document.createElement('div');
-          actions.className = 'flex items-center gap-0.5 shrink-0';
-
-          const testBtn = document.createElement('button');
-          testBtn.className = 'px-1.5 py-0.5 rounded bg-purple-900/70 hover:bg-purple-800 text-purple-100';
-          testBtn.title = 'このオバケの脅かしモーションを試す';
-          testBtn.textContent = '▶';
-          testBtn.addEventListener('click', () => {
-            this.ghostSystem.triggerSingleById(g.id, (item) => this._onCharacterScaredByGhost(item));
-          });
-
-          const gotoBtn = document.createElement('button');
-          gotoBtn.className = 'px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-sky-300';
-          gotoBtn.title = 'このオバケの近くへ移動';
-          gotoBtn.textContent = '🧭';
-          gotoBtn.addEventListener('click', () => {
-            if (this.activeCharacter && g.basePos) {
-              this.activeCharacter.root.position.set(g.basePos.x, g.basePos.y, g.basePos.z + 2.4);
-              this._snapAllCharactersToGround();
-              this.showToast(`#${idx + 1} ${shortName} の近くへ移動しました`, 'sky', 1600);
-            }
-          });
-
-          const delBtn = document.createElement('button');
-          delBtn.className = 'px-1.5 py-0.5 rounded bg-slate-800 hover:bg-rose-900/80 text-rose-300';
-          delBtn.title = 'このオバケを削除';
-          delBtn.textContent = '✕';
-          delBtn.addEventListener('click', () => {
-            this.ghostSystem.removeGimmickById(g.id);
-            this._updateGhostCountLabel();
-          });
-
-          actions.append(testBtn, gotoBtn, delBtn);
-          row.appendChild(actions);
           listEl.appendChild(row);
         });
-      }
 
-      async exportHauntedHouseGLB() {
-        try {
-          this.showToast('📦 お化け屋敷GLBを書き出しています...', 'emerald', 2200);
-          const exportRoot = new THREE.Group();
-          exportRoot.name = 'HauntedHouseExportScene';
-
-          const stageClone = this.stageWorld.stageGroup.clone(true);
-          exportRoot.add(stageClone);
-
-          // Reset ghosts to idle base transforms cleanly before cloning for export
-          for (const g of this.ghostSystem.gimmicks) {
-            if (g.kind === 'builtin' && g.node && g.basePos) {
-              g.node.position.copy(g.basePos);
-              g.node.rotation.set(0, 0, 0);
-              g.node.scale.copy(g.baseScale);
-            }
-          }
-          const ghostsClone = this.ghostSystem.spawnedGroup.clone(true);
-          exportRoot.add(ghostsClone);
-
-          const animations = this.ghostSystem.buildExportableAnimations();
-          const exporter = new GLTFExporter();
-
-          exporter.parse(
-            exportRoot,
-            (result) => {
-              if (result instanceof ArrayBuffer) {
-                const blob = new Blob([result], { type: 'model/gltf-binary' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `haunted_house_${this.ghostSystem.gimmicks.length}ghosts.glb`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                setTimeout(() => URL.revokeObjectURL(url), 5000);
-                this.showToast(`💾 GLBファイルのダウンロードを開始しました！(アニメ:${animations.length}本)`, 'emerald', 3200);
-              }
-            },
-            (err) => {
-              console.error('GLTFExporter error:', err);
-              this.showToast('GLB出力中にエラーが発生しました', 'rose');
-            },
-            { binary: true, animations }
-          );
-        } catch (err) {
-          console.error(err);
-          this.showToast('GLB出力に失敗しました', 'rose');
-        }
-      }
-
-      _updateCharacters(dt) {
-        const active = this.activeCharacter;
-        const autoStopOnMove = document.getElementById('chk-auto-stop-on-move')?.checked ?? true;
-
-        this.characters.forEach((ch, idx) => {
-          const isControlled = idx === this.activeCharIndex;
-          let speedRatio = 0;
-
-          if (isControlled) {
-            let fwd = 0;
-            let right = 0;
-            if (this.keys['KeyW'] || this.keys['ArrowUp'] || this.touchMove.up) fwd += 1;
-            if (this.keys['KeyS'] || this.keys['ArrowDown'] || this.touchMove.down) fwd -= 1;
-            if (this.keys['KeyD'] || this.keys['ArrowRight'] || this.touchMove.right) right += 1;
-            if (this.keys['KeyA'] || this.keys['ArrowLeft'] || this.touchMove.left) right -= 1;
-
-            const hasMove = fwd !== 0 || right !== 0;
-            const isRun = this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.touchSprint;
-
-            if (hasMove) {
-              if (autoStopOnMove && ch.motionState !== 'walk') {
-                ch.stopMotionToWalk();
-                this._refreshAllUI();
-              }
-
-              const forwardVec = new THREE.Vector3(-Math.sin(this.camYaw), 0, -Math.cos(this.camYaw));
-              const rightVec = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
-              const moveDir = new THREE.Vector3()
-                .addScaledVector(forwardVec, fwd)
-                .addScaledVector(rightVec, right)
-                .normalize();
-
-              const stepDist = (isRun ? 4.5 : 2.7) * dt;
-              const dirX = new THREE.Vector3(Math.sign(moveDir.x), 0, 0);
-              if (Math.abs(moveDir.x) * stepDist > 0.0001 && !this.stageWorld.checkWallObstacle(ch.root.position, dirX, Math.abs(moveDir.x) * stepDist)) {
-                ch.root.position.x += moveDir.x * stepDist;
-              }
-              const dirZ = new THREE.Vector3(0, 0, Math.sign(moveDir.z));
-              if (Math.abs(moveDir.z) * stepDist > 0.0001 && !this.stageWorld.checkWallObstacle(ch.root.position, dirZ, Math.abs(moveDir.z) * stepDist)) {
-                ch.root.position.z += moveDir.z * stepDist;
-              }
-
-              const targetYaw = Math.atan2(moveDir.x, moveDir.z);
-              let diff = targetYaw - ch.root.rotation.y;
-              while (diff > Math.PI) diff -= Math.PI * 2;
-              while (diff < -Math.PI) diff += Math.PI * 2;
-              ch.root.rotation.y += diff * Math.min(1, dt * 11);
-
-              speedRatio = isRun ? 1.0 : 0.65;
-            }
-
-            if (this.firstPersonMode) {
-              ch.root.rotation.y = this.camYaw + Math.PI;
-              if (speedRatio > 0.05 && ch.isGrounded) {
-                this.headBobTimer += dt * (speedRatio > 0.8 ? 13.5 : 9.8);
-              } else {
-                this.headBobTimer = 0;
-              }
-            }
-          } else if (this.autoWalkEnabled && ch.hasFootAndToeIK && ch.motionState === 'walk') {
-            // Autonomous random walk for non-controlled IK characters
-            if (ch.aiWaitTimer > 0) {
-              ch.aiWaitTimer -= dt;
-            } else {
-              if (!ch.aiTarget) {
-                const angle = Math.random() * Math.PI * 2;
-                const radius = 2.0 + Math.random() * 5.0;
-                ch.aiTarget = new THREE.Vector3(
-                  Math.max(-9, Math.min(9, ch.root.position.x + Math.cos(angle) * radius)),
-                  0,
-                  Math.max(-11, Math.min(7, ch.root.position.z + Math.sin(angle) * radius))
-                );
-              }
-              const toTarget = new THREE.Vector3(ch.aiTarget.x - ch.root.position.x, 0, ch.aiTarget.z - ch.root.position.z);
-              const dist = toTarget.length();
-              if (dist < 0.35) {
-                ch.aiTarget = null;
-                ch.aiWaitTimer = 1.0 + Math.random() * 2.0;
-              } else {
-                toTarget.normalize();
-                const step = ch.aiSpeed * dt;
-                if (this.stageWorld.checkWallObstacle(ch.root.position, toTarget, step)) {
-                  ch.aiTarget = null;
-                  ch.aiWaitTimer = 0.6;
-                } else {
-                  ch.root.position.x += toTarget.x * step;
-                  ch.root.position.z += toTarget.z * step;
-                  const targetYaw = Math.atan2(toTarget.x, toTarget.z);
-                  let diff = targetYaw - ch.root.rotation.y;
-                  while (diff > Math.PI) diff -= Math.PI * 2;
-                  while (diff < -Math.PI) diff += Math.PI * 2;
-                  ch.root.rotation.y += diff * Math.min(1, dt * 7);
-                  speedRatio = 0.65;
-                }
-              }
-            }
-          }
-
-          // Gravity & Ground Collision
-          const groundY = this._sampleGroundHeight(ch.root.position.x, ch.root.position.z, ch.root.position.y);
-          if (!ch.isGrounded || ch.velocityY > 0) {
-            ch.velocityY -= 14.5 * dt;
-            ch.root.position.y += ch.velocityY * dt;
-            if (groundY !== null && ch.root.position.y <= groundY && ch.velocityY <= 0) {
-              ch.root.position.y = groundY;
-              ch.velocityY = 0;
-              ch.isGrounded = true;
-            }
-          } else if (groundY !== null) {
-            ch.root.position.y += (groundY - ch.root.position.y) * Math.min(1, dt * 15);
-          }
-
-          ch.update(dt, speedRatio, isControlled ? this.lipSync.vowels : null);
-
-          if (isControlled) {
-            const gyEl = document.getElementById('hud-ground-y');
-            if (gyEl) gyEl.textContent = `${ch.root.position.y.toFixed(2)}m`;
-          }
+        listEl.querySelectorAll('.ghost-item-motion-sel').forEach((sel) => {
+          sel.addEventListener('change', (e) => {
+            const gid = e.target.dataset.gid;
+            const newMotion = e.target.value;
+            this.ghostSystem.setGimmickMotion(gid, newMotion);
+            const label = presets.find((p) => p.id === newMotion)?.label || newMotion;
+            this.showToast(`モーションを【${label}】に変更しました`, 'violet', 1600);
+          });
         });
+
+        listEl.querySelectorAll('.ghost-item-test-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            this.ghostSystem.triggerSingleById(btn.dataset.gid, (g) => this._onCharacterScaredByGhost(g));
+          });
+        });
+
+        listEl.querySelectorAll('.ghost-item-tp-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const target = this.ghostSystem.gimmicks.find((item) => item.id === btn.dataset.gid);
+            const active = this.activeCharacter;
+            if (target && active) {
+              active.root.position.set(target.basePos.x, target.basePos.y, target.basePos.z + 2.4);
+              active.velocityY = 0;
+              active.isGrounded = true;
+              this.showToast(`📍 「${target.name.split(' (')[0]}」の近くへ移動しました`, 'sky', 1600);
+            }
+          });
+        });
+
+        listEl.querySelectorAll('.ghost-item-del-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            this.ghostSystem.removeGimmickById(btn.dataset.gid);
+            this._updateGhostCountLabel();
+          });
+        });
+      }
+
+      async _handleImportedPackage(pkg) {
+        let addedChars = 0;
+        let addedMotions = 0;
+        let loadedStage = false;
+
+        let targetPmxFiles = pkg.pmxFiles;
+        if (pkg.pmxEntries && pkg.pmxEntries.length > 1) {
+          targetPmxFiles = await this._promptSelectPMXEntries(pkg.pmxEntries);
+        }
+
+        if (targetPmxFiles.length > 0 || pkg.stageFiles.length > 0) {
+          this._setLoadingOverlay(
+            true,
+            targetPmxFiles.length > 0 ? 'PMXキャラクターを読み込み中...' : '環境GLBステージを読み込み中...',
+            'テクスチャ最適化とメッシュ構築を行っています'
+          );
+          await new Promise((r) => setTimeout(r, 40));
+        }
+
+        try {
+          for (const pmxFile of targetPmxFiles) {
+            try {
+              const charId = `char_${++this.charCounter}`;
+              const cleanName = pmxFile.name.replace(/\.(pmx|pmd)$/i, '');
+              const entity = new CharacterEntity(charId, cleanName, this.scene);
+              await entity.loadPMXFromFile(pmxFile, pkg.fileMap);
+
+              const base = this.activeCharacter ? this.activeCharacter.root.position : this.initialSpawnPos;
+              const offsetIndex = this.characters.length;
+              const side = offsetIndex % 2 === 1 ? 1 : -1;
+              const dist = Math.ceil(offsetIndex / 2) * 1.25;
+              entity.root.position.set(base.x + side * dist, base.y, base.z);
+              entity.root.rotation.y = this.activeCharacter ? this.activeCharacter.root.rotation.y : this.initialSpawnYaw;
+
+              this.characters.push(entity);
+              this.activeCharIndex = this.characters.length - 1;
+              addedChars++;
+            } catch (err) {
+              console.error('PMX load error:', err);
+              this.showToast(`PMX「${pmxFile.name}」の読込に失敗しました`, 'rose');
+            }
+          }
+
+          for (const mFile of pkg.motionFiles) {
+            const lower = mFile.name.toLowerCase();
+            const type = lower.endsWith('.vpd') ? 'vpd' : 'vmd';
+            const cleanName = mFile.name.replace(/\.(vmd|vpd)$/i, '');
+            this.motions.push({
+              id: `motion_${++this.motionCounter}`,
+              name: cleanName,
+              type,
+              file: mFile
+            });
+            addedMotions++;
+          }
+
+          if (pkg.stageFiles.length > 0) {
+            const stageFile = pkg.stageFiles[0];
+            try {
+              const info = await this.stageWorld.loadGLB(stageFile);
+              const foundGhosts = this.ghostSystem.scanGLBForTriggers(info.gltfScene, info.animations, this.stageWorld);
+              document.getElementById('stage-status').textContent = `現在：${this.stageWorld.stageName} (${info.meshCount}パーツ)`;
+              document.getElementById('drawer-stage-status').textContent = `現在：${this.stageWorld.stageName} (${info.meshCount}パーツ)`;
+              document.getElementById('hud-stage-name').textContent = this.stageWorld.stageName;
+              this._updateGhostCountLabel();
+              loadedStage = true;
+              if (foundGhosts > 0) {
+                this.showToast(`👻 GLB内の妖怪トリガー ${foundGhosts}件 を検出しました！`, 'violet', 3200);
+              }
+            } catch (err) {
+              console.error('GLB stage load error:', err);
+              this.showToast(`環境GLB「${stageFile.name}」の読込に失敗しました`, 'rose');
+            }
+          }
+        } finally {
+          this._setLoadingOverlay(false);
+        }
+
+        if (addedChars > 0) {
+          this._syncActiveCharacterAttachment();
+          this._snapAllCharactersToGround();
+          this.showToast(`PMXキャラ ${addedChars}体 を追加しました！`, 'emerald');
+        }
+        if (addedMotions > 0) {
+          this.showToast(`VMD / ポーズ ${addedMotions}件 を追加しました！`, 'violet');
+        }
+        if (loadedStage) {
+          this._snapAllCharactersToGround();
+          this.showToast(`環境GLB「${this.stageWorld.stageName}」を読み込みました！`, 'sky');
+        }
+
+        this._refreshAllUI();
+      }
+
+      _syncActiveCharacterAttachment() {
+        this.characters.forEach((ch, idx) => {
+          const isActive = idx === this.activeCharIndex;
+          ch.setFlashlight(isActive && this.flashlightEnabled);
+          ch.setFirstPersonHidden(isActive && this.firstPersonMode);
+        });
+      }
+
+      _cycleActiveCharacter() {
+        if (this.characters.length <= 1) {
+          this.showToast('操作できるキャラは現在1体です（PMXを追加すると乗り移れます）');
+          return;
+        }
+        this.activeCharIndex = (this.activeCharIndex + 1) % this.characters.length;
+        this._syncActiveCharacterAttachment();
+        this._refreshAllUI();
+        this.showToast(`🎮 「${this.activeCharacter.name}」に乗り移りました！`);
+      }
+
+      _switchToCharacter(index) {
+        if (index < 0 || index >= this.characters.length) return;
+        this.activeCharIndex = index;
+        this._syncActiveCharacterAttachment();
+        this._refreshAllUI();
+        this.showToast(`🎮 「${this.activeCharacter.name}」に切り替えました`);
+      }
+
+      _removeCharacter(index) {
+        if (this.characters.length <= 1) {
+          this.showToast('最後の1体は削除できません', 'rose');
+          return;
+        }
+        const [removed] = this.characters.splice(index, 1);
+        if (removed) {
+          removed._clearModel();
+          this.scene.remove(removed.root);
+        }
+        if (this.activeCharIndex >= this.characters.length) {
+          this.activeCharIndex = this.characters.length - 1;
+        }
+        this._syncActiveCharacterAttachment();
+        this._refreshAllUI();
+      }
+
+      async _triggerMotion(motionEntry) {
+        const targets =
+          this.motionTargetMode === 'all'
+            ? this.characters
+            : [this.activeCharacter].filter(Boolean);
+
+        for (const ch of targets) {
+          try {
+            await ch.applyMotion(motionEntry);
+          } catch (err) {
+            console.error('Motion apply error:', err);
+          }
+        }
+        this._refreshAllUI();
+        const scopeText = this.motionTargetMode === 'all' ? '全員' : this.activeCharacter?.name;
+        this.showToast(`🎞️ ${scopeText} に「${motionEntry.name}」を適用しました`, 'violet', 1800);
+      }
+
+      _toggleAutoWalk() {
+        this.autoWalkEnabled = !this.autoWalkEnabled;
+        const badge = document.getElementById('autowalk-state');
+        if (badge) {
+          badge.textContent = this.autoWalkEnabled ? 'ON' : 'OFF';
+          badge.className = this.autoWalkEnabled
+            ? 'text-[11px] px-1.5 py-0.5 rounded bg-emerald-600 text-white font-bold'
+            : 'text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-bold';
+        }
+        this._refreshHotkeyBar();
+        this.showToast(
+          this.autoWalkEnabled
+            ? '🚶 自動歩行 ON（操作キャラ以外のIK付きキャラが自由に歩き回ります）'
+            : '🚶 自動歩行 OFF',
+          this.autoWalkEnabled ? 'emerald' : 'sky'
+        );
+      }
+
+      _toggleFlashlight() {
+        this.flashlightEnabled = !this.flashlightEnabled;
+        this._syncActiveCharacterAttachment();
+        const badge = document.getElementById('flashlight-state');
+        if (badge) {
+          badge.textContent = this.flashlightEnabled ? 'ON' : 'OFF';
+          badge.className = this.flashlightEnabled
+            ? 'text-[11px] px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 font-bold'
+            : 'text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-bold';
+        }
+        this.showToast(this.flashlightEnabled ? '🔦 手持ちライト ON' : '🔦 手持ちライト OFF');
+      }
+
+      _toggleFirstPerson() {
+        this.firstPersonMode = !this.firstPersonMode;
+        const active = this.activeCharacter;
+        if (this.firstPersonMode) {
+          if (active) {
+            this.camYaw = active.root.rotation.y + Math.PI;
+          }
+          this.camPitch = 0.0;
+        } else {
+          this.camPitch = 0.25;
+        }
+        this._syncActiveCharacterAttachment();
+
+        const icon = document.getElementById('fpv-icon');
+        const label = document.getElementById('fpv-label');
+        const btn = document.getElementById('btn-first-person');
+        if (icon) icon.textContent = this.firstPersonMode ? '👁️‍🗨️' : '🎥';
+        if (label) label.textContent = this.firstPersonMode ? '三人称へ' : '一人称';
+        if (btn) {
+          if (this.firstPersonMode) {
+            btn.classList.add('bg-cyan-950/80', 'border-cyan-400');
+          } else {
+            btn.classList.remove('bg-cyan-950/80', 'border-cyan-400');
+          }
+        }
+        this._refreshHotkeyBar();
+        this.showToast(
+          this.firstPersonMode
+            ? '👁️ 一人称視点モード ON（マウスドラッグで周囲を見渡せます）'
+            : '🎥 三人称視点モードに戻りました',
+          'sky',
+          2200
+        );
+      }
+
+      _toggleUI() {
+        this.uiHidden = !this.uiHidden;
+        const uiLayer = document.getElementById('ui-layer');
+        if (uiLayer) {
+          uiLayer.classList.toggle('hidden', this.uiHidden);
+        }
+        this.ghostSystem.setUIHidden(this.uiHidden);
+        if (this.uiHidden) {
+          this.showToast('👁️ UIを非表示にしました（テンキー0 で再表示）', 'sky', 2000);
+        }
       }
 
       _jumpActiveCharacter() {
         const active = this.activeCharacter;
         if (!active || !active.isGrounded) return;
-        active.velocityY = 6.2;
+        active.velocityY = 5.6;
         active.isGrounded = false;
       }
 
       _resetActiveCharacterPosition() {
         const active = this.activeCharacter;
         if (!active) return;
-        active.root.position.set(0, 0, 2.5);
-        active.root.rotation.y = Math.PI;
+        active.root.position.copy(this.initialSpawnPos);
+        active.root.rotation.y = this.initialSpawnYaw;
+        const gY = this._sampleGroundHeight(active.root.position.x, active.root.position.z, active.root.position.y + 3.0);
+        if (gY !== null) active.root.position.y = gY;
+        active.velocityY = 0;
+        active.isGrounded = true;
         if (this.firstPersonMode) {
           this.camYaw = active.root.rotation.y + Math.PI;
-          this.camPitch = 0.04;
+          this.camPitch = 0.0;
         }
-        this._snapAllCharactersToGround();
-        this.showToast('操作キャラを初期位置へ戻しました');
+        this.showToast(
+          `🧭 初期位置 (${active.root.position.x.toFixed(1)}, ${active.root.position.y.toFixed(1)}, ${active.root.position.z.toFixed(1)}) に戻りました`
+        );
       }
 
-      _toggleFlashlight() {
-        this.flashlightEnabled = !this.flashlightEnabled;
-        this._updateFlashlightVisibility();
-        const badge = document.getElementById('flashlight-state');
-        if (badge) {
-          badge.textContent = this.flashlightEnabled ? 'ON' : 'OFF';
-          badge.className = this.flashlightEnabled
-            ? 'text-[11px] px-1.5 py-0.5 rounded bg-amber-500/30 text-amber-200 font-bold'
-            : 'text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-bold';
+      _refreshAllUI() {
+        const active = this.activeCharacter;
+        document.getElementById('hud-active-char').textContent = active ? active.name : 'なし';
+        document.getElementById('badge-counts').textContent = `${this.characters.length}体 / ${this.motions.length}件`;
+        document.getElementById('tab-char-count').textContent = this.characters.length;
+        document.getElementById('tab-motion-count').textContent = this.motions.length;
+        document.getElementById('modal-char-status').textContent = `登録済: ${this.characters.length}体`;
+        document.getElementById('modal-motion-status').textContent = `登録済: ${this.motions.length}件`;
+
+        if (active) {
+          const stLabel =
+            active.motionState === 'vmd_playing'
+              ? `再生中: ${active.currentMotionName}`
+              : active.motionState === 'vmd_paused'
+                ? `一時停止: ${active.currentMotionName}`
+                : active.motionState === 'vpd_pose'
+                  ? `ポーズ: ${active.currentMotionName}`
+                  : '状態: 歩行/待機';
+          document.getElementById('hud-active-motion').textContent = stLabel;
         }
-        this.showToast(`🔦 手持ちライト: ${this.flashlightEnabled ? 'ON' : 'OFF'}`, 'sky', 1600);
+
+        this._renderCharacterList();
+        this._renderMotionList();
+        this._refreshHotkeyBar();
       }
 
-      _updateFlashlightVisibility() {
+      _renderCharacterList() {
+        const list = document.getElementById('character-list');
+        if (!list) return;
+        list.innerHTML = '';
+
         this.characters.forEach((ch, idx) => {
-          const isCurrent = idx === this.activeCharIndex;
-          ch.setFlashlight(this.flashlightEnabled && isCurrent);
+          const isActive = idx === this.activeCharIndex;
+          const card = document.createElement('div');
+          card.className = `rounded-xl p-2.5 border transition ${
+            isActive
+              ? 'bg-sky-950/60 border-sky-400/65'
+              : 'bg-slate-900/75 border-slate-700/60 hover:border-slate-500/70'
+          }`;
+
+          const statusText =
+            ch.motionState === 'vmd_playing'
+              ? `▶ ${ch.currentMotionName}`
+              : ch.motionState === 'vpd_pose'
+                ? `🧍 ${ch.currentMotionName}`
+                : ch.hasFootAndToeIK
+                  ? '🚶 歩行待機 (足/つま先IK対応)'
+                  : '🚶 歩行待機';
+
+          card.innerHTML = `
+            <div class="flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-xs font-bold text-white truncate">${ch.name}</span>
+                  ${isActive ? '<span class="text-[10px] px-1.5 py-0.2 rounded bg-sky-500 text-slate-950 font-bold">操作中</span>' : ''}
+                </div>
+                <div class="text-[10px] text-slate-400 truncate mt-0.5">${statusText}</div>
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                ${
+                  !isActive
+                    ? `<button data-idx="${idx}" class="btn-select-char px-2 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-[11px] font-semibold text-white">操作する</button>`
+                    : ''
+                }
+                ${
+                  this.characters.length > 1
+                    ? `<button data-idx="${idx}" class="btn-del-char px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-900/80 text-[11px] text-slate-300 hover:text-rose-200">✕</button>`
+                    : ''
+                }
+              </div>
+            </div>
+          `;
+          list.appendChild(card);
+        });
+
+        list.querySelectorAll('.btn-select-char').forEach((btn) => {
+          btn.addEventListener('click', () => this._switchToCharacter(parseInt(btn.dataset.idx, 10)));
+        });
+        list.querySelectorAll('.btn-del-char').forEach((btn) => {
+          btn.addEventListener('click', () => this._removeCharacter(parseInt(btn.dataset.idx, 10)));
         });
       }
 
-      _updateLipSyncUI() {
-        if (this.lipSync.mode === 'idle') return;
-        const vowelEl = document.getElementById('lipsync-vowel-display');
-        if (vowelEl) {
-          vowelEl.textContent = this.lipSync.dominantVowel === 'ー' ? '無音 (ー)' : `母音「${this.lipSync.dominantVowel}」`;
+      _renderMotionList() {
+        const list = document.getElementById('motion-list');
+        if (!list) return;
+
+        if (this.motions.length === 0) {
+          list.innerHTML = `
+            <div class="text-center py-6 px-3 rounded-xl bg-slate-900/50 border border-dashed border-slate-700 text-xs text-slate-400">
+              VMDモーションまたはVPDポーズがまだありません。<br>上のボタンまたは画面へのドラッグ＆ドロップで追加できます。
+            </div>
+          `;
+          return;
         }
-        const barEl = document.getElementById('lipsync-level-bar');
-        if (barEl) {
-          barEl.style.width = `${Math.min(100, Math.round(this.lipSync.level * 100))}%`;
-        }
-        for (const v of ['a', 'i', 'u', 'e', 'o']) {
-          const el = document.getElementById(`v-${v}`);
-          if (el) {
-            el.textContent = `${Math.min(100, Math.round(this.lipSync.vowels[v] * 100))}%`;
-          }
-        }
+
+        list.innerHTML = '';
+        this.motions.forEach((m, idx) => {
+          const slotTag = idx < 8 ? `[キー ${idx + 1}]` : '';
+          const typeBadge =
+            m.type === 'vpd'
+              ? '<span class="text-[10px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-500/30">VPDポーズ</span>'
+              : '<span class="text-[10px] px-1.5 py-0.2 rounded bg-violet-950 text-violet-300 border border-violet-500/30">VMDモーション</span>';
+
+          const row = document.createElement('div');
+          row.className = 'rounded-xl p-2.5 bg-slate-900/80 border border-slate-700/65 flex items-center justify-between gap-2';
+          row.innerHTML = `
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5">
+                ${slotTag ? `<span class="text-[10px] font-mono text-amber-300 font-bold">${slotTag}</span>` : ''}
+                ${typeBadge}
+              </div>
+              <div class="text-xs font-semibold text-slate-100 truncate mt-0.5">${m.name}</div>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              <button data-mid="${m.id}" class="btn-play-motion px-2.5 py-1 rounded-lg bg-violet-600 hover:bg-violet-500 text-[11px] font-semibold text-white">▶ 適用</button>
+              <button data-midx="${idx}" class="btn-del-motion px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-900/80 text-[11px] text-slate-400 hover:text-rose-200">✕</button>
+            </div>
+          `;
+          list.appendChild(row);
+        });
+
+        list.querySelectorAll('.btn-play-motion').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const found = this.motions.find((item) => item.id === btn.dataset.mid);
+            if (found) this._triggerMotion(found);
+          });
+        });
+        list.querySelectorAll('.btn-del-motion').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const idx = parseInt(btn.dataset.midx, 10);
+            this.motions.splice(idx, 1);
+            this._refreshAllUI();
+          });
+        });
       }
 
-      _updateCamera(dt) {
+      _refreshHotkeyBar() {
+        const bar = document.getElementById('hotkey-quickbar');
+        if (!bar) return;
+        bar.innerHTML = '';
+
+        for (let i = 0; i < 8; i++) {
+          const m = this.motions[i];
+          const btn = document.createElement('button');
+          btn.className = m
+            ? 'px-2.5 py-1 rounded-xl bg-violet-950/85 hover:bg-violet-800/85 text-violet-100 border border-violet-400/40 text-[11px] font-medium whitespace-nowrap transition'
+            : 'px-2 py-1 rounded-xl bg-slate-900/60 text-slate-500 border border-slate-800 text-[11px] whitespace-nowrap cursor-default';
+          btn.textContent = m ? `${i + 1} ${m.name.slice(0, 7)}` : `${i + 1} 空`;
+          if (m) {
+            btn.title = `キー ${i + 1}: ${m.name}`;
+            btn.addEventListener('click', () => this._triggerMotion(m));
+          }
+          bar.appendChild(btn);
+        }
+
+        const btn9 = document.createElement('button');
+        btn9.className = this.autoWalkEnabled
+          ? 'px-2.5 py-1 rounded-xl bg-emerald-600 text-white font-bold text-[11px] whitespace-nowrap transition'
+          : 'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/35 text-[11px] font-medium whitespace-nowrap transition';
+        btn9.textContent = '9 自動歩行';
+        btn9.addEventListener('click', () => this._toggleAutoWalk());
+        bar.appendChild(btn9);
+
+        const btnFpv = document.createElement('button');
+        btnFpv.className = this.firstPersonMode
+          ? 'px-2.5 py-1 rounded-xl bg-cyan-600 text-white font-bold text-[11px] whitespace-nowrap transition'
+          : 'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-200 border border-cyan-500/35 text-[11px] font-medium whitespace-nowrap transition';
+        btnFpv.textContent = this.firstPersonMode ? 'V 三人称視点' : 'V 一人称視点';
+        btnFpv.addEventListener('click', () => this._toggleFirstPerson());
+        bar.appendChild(btnFpv);
+
+        const btn0 = document.createElement('button');
+        btn0.className = 'px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-200 border border-amber-500/35 text-[11px] font-medium whitespace-nowrap transition';
+        btn0.textContent = '0 UI隠す';
+        btn0.addEventListener('click', () => this._toggleUI());
+        bar.appendChild(btn0);
+      }
+
+      _updateActiveCharacterMovement(dt) {
+        const active = this.activeCharacter;
+        if (!active) return;
+
+        let forwardInput = 0;
+        let rightInput = 0;
+        if (this.keys['KeyW'] || this.keys['ArrowUp'] || this.touchMove.up) forwardInput += 1;
+        if (this.keys['KeyS'] || this.keys['ArrowDown'] || this.touchMove.down) forwardInput -= 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight'] || this.touchMove.right) rightInput += 1;
+        if (this.keys['KeyA'] || this.keys['ArrowLeft'] || this.touchMove.left) rightInput -= 1;
+
+        const isMoving = forwardInput !== 0 || rightInput !== 0;
+        const isSprinting = Boolean(this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.touchSprint);
+
+        if (isMoving && active.motionState !== 'walk') {
+          const autoStop = document.getElementById('chk-auto-stop-on-move')?.checked;
+          if (autoStop) {
+            active.stopMotionToWalk();
+            this._refreshAllUI();
+          }
+        }
+
+        let speedRatio = 0;
+        if (isMoving) {
+          const moveAngle = Math.atan2(rightInput, forwardInput);
+          const worldDirAngle = this.camYaw + Math.PI + moveAngle;
+
+          if (!this.firstPersonMode) {
+            let diff = worldDirAngle - active.root.rotation.y;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            active.root.rotation.y += diff * Math.min(1, dt * 14);
+          }
+
+          const moveSpeed = isSprinting ? 5.2 : 2.75;
+          speedRatio = isSprinting ? 1.0 : 0.55;
+          const stepDist = moveSpeed * dt;
+          const dirVec = new THREE.Vector3(Math.sin(worldDirAngle), 0, Math.cos(worldDirAngle));
+
+          if (!this.stageWorld.checkWallObstacle(active.root.position, dirVec, stepDist)) {
+            active.root.position.addScaledVector(dirVec, stepDist);
+          }
+        }
+
+        if (this.firstPersonMode) {
+          active.root.rotation.y = this.camYaw + Math.PI;
+        }
+
+        // Gravity & Ground Collision
+        active.velocityY -= 15.5 * dt;
+        active.root.position.y += active.velocityY * dt;
+
+        const groundY = this._sampleGroundHeight(active.root.position.x, active.root.position.z, active.root.position.y);
+        if (groundY !== null && active.root.position.y <= groundY + 0.02 && active.velocityY <= 0) {
+          active.root.position.y = groundY;
+          active.velocityY = 0;
+          active.isGrounded = true;
+        } else if (groundY === null && active.root.position.y < -8) {
+          this._resetActiveCharacterPosition();
+        }
+
+        document.getElementById('hud-ground-y').textContent = `${active.root.position.y.toFixed(2)}m`;
+        active.update(dt, speedRatio, this.lipSync.vowels);
+      }
+
+      _updateAutonomousCharacters(dt) {
+        this.characters.forEach((ch, idx) => {
+          if (idx === this.activeCharIndex) return;
+
+          let speedRatio = 0;
+          if (this.autoWalkEnabled && ch.hasFootAndToeIK && ch.motionState === 'walk') {
+            if (ch.aiWaitTimer > 0) {
+              ch.aiWaitTimer -= dt;
+            } else {
+              if (!ch.aiTarget) {
+                const base = this.activeCharacter ? this.activeCharacter.root.position : new THREE.Vector3();
+                const angle = Math.random() * Math.PI * 2;
+                const radius = 1.8 + Math.random() * 6.5;
+                ch.aiTarget = new THREE.Vector3(
+                  base.x + Math.cos(angle) * radius,
+                  base.y,
+                  base.z + Math.sin(angle) * radius
+                );
+              }
+
+              const toTarget = new THREE.Vector3(
+                ch.aiTarget.x - ch.root.position.x,
+                0,
+                ch.aiTarget.z - ch.root.position.z
+              );
+              const dist = toTarget.length();
+              if (dist < 0.45) {
+                ch.aiTarget = null;
+                ch.aiWaitTimer = 0.8 + Math.random() * 2.2;
+              } else {
+                toTarget.normalize();
+                const targetYaw = Math.atan2(toTarget.x, toTarget.z);
+                let diff = targetYaw - ch.root.rotation.y;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+                ch.root.rotation.y += diff * Math.min(1, dt * 8);
+
+                const step = ch.aiSpeed * dt;
+                if (!this.stageWorld.checkWallObstacle(ch.root.position, toTarget, step)) {
+                  ch.root.position.addScaledVector(toTarget, step);
+                  speedRatio = 0.5;
+                } else {
+                  ch.aiTarget = null;
+                  ch.aiWaitTimer = 0.5;
+                }
+              }
+            }
+          }
+
+          const groundY = this._sampleGroundHeight(ch.root.position.x, ch.root.position.z, ch.root.position.y + 1.0);
+          if (groundY !== null) {
+            ch.root.position.y = groundY;
+          }
+          ch.update(dt, speedRatio, null);
+        });
+      }
+
+      _updateCamera(dt = 0.016) {
         const active = this.activeCharacter;
         if (!active) return;
 
@@ -4678,15 +5152,31 @@
         }
 
         if (this.firstPersonMode) {
-          const bobY = this.headBobTimer > 0 ? Math.abs(Math.sin(this.headBobTimer)) * 0.045 : 0;
-          const shakeX = this.cameraShakeTimer > 0 ? (Math.random() - 0.5) * 0.09 * (this.cameraShakeTimer / 0.45) : 0;
-          const shakeY = this.cameraShakeTimer > 0 ? (Math.random() - 0.5) * 0.09 * (this.cameraShakeTimer / 0.45) : 0;
-
-          const eyePos = new THREE.Vector3(
-            active.root.position.x + shakeX,
-            active.root.position.y + 1.48 + bobY + shakeY,
-            active.root.position.z
+          const isMoving = Boolean(
+            this.keys['KeyW'] ||
+            this.keys['KeyS'] ||
+            this.keys['KeyA'] ||
+            this.keys['KeyD'] ||
+            this.keys['ArrowUp'] ||
+            this.keys['ArrowDown'] ||
+            this.keys['ArrowLeft'] ||
+            this.keys['ArrowRight'] ||
+            this.touchMove.up ||
+            this.touchMove.down ||
+            this.touchMove.left ||
+            this.touchMove.right
           );
+          const isSprinting = Boolean(this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.touchSprint);
+          if (isMoving) {
+            this.headBobTimer += dt * (isSprinting ? 13.5 : 9.2);
+          }
+
+          const bobY = isMoving ? Math.sin(this.headBobTimer) * 0.032 : Math.sin(performance.now() * 0.0022) * 0.008;
+          const bobX = isMoving ? Math.cos(this.headBobTimer * 0.5) * 0.018 : 0;
+
+          const shakeIntensity = this.cameraShakeTimer > 0 ? (this.cameraShakeTimer / 0.45) * 0.055 : 0;
+          const shakeX = shakeIntensity > 0 ? (Math.random() - 0.5) * shakeIntensity : 0;
+          const shakeY = shakeIntensity > 0 ? (Math.random() - 0.5) * shakeIntensity : 0;
 
           const lookDir = new THREE.Vector3(
             -Math.sin(this.camYaw) * Math.cos(this.camPitch),
@@ -4694,52 +5184,66 @@
             -Math.cos(this.camYaw) * Math.cos(this.camPitch)
           ).normalize();
 
+          const rightDir = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
+
+          const eyePos = active.root.position.clone().add(new THREE.Vector3(0, 1.50 + bobY + shakeY, 0));
+          eyePos.addScaledVector(rightDir, bobX + shakeX);
+
           this.camera.position.copy(eyePos);
-          this.camera.lookAt(eyePos.clone().add(lookDir));
+          this.camera.lookAt(eyePos.clone().addScaledVector(lookDir, 6.0));
 
           if (this.flashlightEnabled && active.flashlightGroup) {
-            const rightVec = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
-            active.flashlightGroup.position
-              .copy(eyePos)
-              .addScaledVector(rightVec, 0.22)
-              .add(new THREE.Vector3(0, -0.18, 0))
-              .addScaledVector(lookDir, 0.25);
-            const aimPoint = eyePos.clone().addScaledVector(lookDir, 8.0).add(new THREE.Vector3(0, 0.55, 0));
-            active.flashlightGroup.lookAt(aimPoint);
+            const handPos = eyePos.clone()
+              .addScaledVector(rightDir, 0.22)
+              .add(new THREE.Vector3(0, -0.22, 0))
+              .addScaledVector(lookDir, 0.35);
+            active.flashlightGroup.position.copy(handPos);
+            active.flashlightGroup.lookAt(eyePos.clone().addScaledVector(lookDir, 8.0));
           }
-          return;
+        } else {
+          const target = active.root.position.clone().add(new THREE.Vector3(0, 1.25, 0));
+          const horizDist = Math.cos(this.camPitch) * this.camDist;
+          const vertDist = Math.sin(this.camPitch) * this.camDist;
+
+          const desiredCamPos = new THREE.Vector3(
+            target.x + Math.sin(this.camYaw) * horizDist,
+            target.y + vertDist,
+            target.z + Math.cos(this.camYaw) * horizDist
+          );
+
+          this.camera.position.lerp(desiredCamPos, 0.22);
+          this.camera.lookAt(target);
         }
-
-        const focusTarget = new THREE.Vector3(
-          active.root.position.x,
-          active.root.position.y + 1.32,
-          active.root.position.z
-        );
-
-        const horizDist = Math.cos(this.camPitch) * this.camDist;
-        const vertDist = Math.sin(this.camPitch) * this.camDist;
-
-        const desiredCamPos = new THREE.Vector3(
-          focusTarget.x + Math.sin(this.camYaw) * horizDist,
-          focusTarget.y + vertDist,
-          focusTarget.z + Math.cos(this.camYaw) * horizDist
-        );
-
-        this.camera.position.lerp(desiredCamPos, 0.22);
-        this.camera.lookAt(focusTarget);
       }
 
       _animate() {
         requestAnimationFrame(() => this._animate());
+        if (this.isLoadingAsset) return;
+
         const dt = Math.min(0.05, this.clock.getDelta());
 
         this.lipSync.update(dt);
-        this._updateCharacters(dt);
-        this._updateLipSyncUI();
+        this._updateActiveCharacterMovement(dt);
+        this._updateAutonomousCharacters(dt);
 
         const active = this.activeCharacter;
-        this.ghostSystem.update(dt, active ? active.root.position : null, (gimmick) => {
-          this._onCharacterScaredByGhost(gimmick);
+        if (active) {
+          this.ghostSystem.update(dt, active.root.position, (g) => this._onCharacterScaredByGhost(g));
+        }
+
+        // Update Lip-Sync HUD meter
+        const levelBar = document.getElementById('lipsync-level-bar');
+        const vowelDisplay = document.getElementById('lipsync-vowel-display');
+        if (levelBar) levelBar.style.width = `${Math.round(this.lipSync.level * 100)}%`;
+        if (vowelDisplay) {
+          vowelDisplay.textContent =
+            this.lipSync.level > 0.04
+              ? `母音「${this.lipSync.dominantVowel}」 (${Math.round(this.lipSync.level * 100)}%)`
+              : '無音 (ー)';
+        }
+        ['a', 'i', 'u', 'e', 'o'].forEach((v) => {
+          const el = document.getElementById(`v-${v}`);
+          if (el) el.textContent = `${Math.round(this.lipSync.vowels[v] * 100)}%`;
         });
 
         this._updateCamera(dt);
@@ -4748,7 +5252,7 @@
     }
 
     window.addEventListener('DOMContentLoaded', () => {
-      new PMXMultiStudioApp();
+      window.studioApp = new PMXMultiStudioApp();
     });
   </script>
 </body>
