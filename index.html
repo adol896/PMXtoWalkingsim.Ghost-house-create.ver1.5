@@ -5020,7 +5020,7 @@
         btn0.addEventListener('click', () => this._toggleUI());
         bar.appendChild(btn0);
       }
-
+      // PMXMultiStudioApp._updateActiveCharacterMovement
       _updateActiveCharacterMovement(dt) {
         const active = this.activeCharacter;
         if (!active) return;
@@ -5046,7 +5046,7 @@
         let speedRatio = 0;
         if (isMoving) {
           const moveAngle = Math.atan2(rightInput, forwardInput);
-          const worldDirAngle = this.camYaw + Math.PI + moveAngle;
+          const worldDirAngle = this.camYaw + Math.PI - moveAngle;
 
           if (!this.firstPersonMode) {
             let diff = worldDirAngle - active.root.rotation.y;
